@@ -1,0 +1,18 @@
+{
+  "name": "foundit",
+  "version": "1.0.0",
+  "scripts": {
+    "migrate": "dotenv -e .env -- node-pg-migrate -m db/migrations up",
+    "migrate:down": "dotenv -e .env -- node-pg-migrate -m db/migrations down 1",
+    "migrate:reset": "dotenv -e .env -- node-pg-migrate -m db/migrations down 100",
+    "seed:reference": "node db/scripts/seed_reference.js",
+    "seed:data": "node db/scripts/seed_data.js"
+  },
+  "dependencies": {
+    "node-pg-migrate": "^7.9.1",
+    "pg": "^8.11.5"
+  },
+  "devDependencies": {
+    "dotenv-cli": "^11.0.0"
+  }
+}
