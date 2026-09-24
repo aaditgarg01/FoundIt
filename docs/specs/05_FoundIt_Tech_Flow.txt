@@ -1,0 +1,1374 @@
+================================================================================
+FOUNDIT — SMART CAMPUS LOST & FOUND
+TECHNICAL FLOW DOCUMENT
+================================================================================
+
+Document ID .............. FI-TFL-001
+Version .................. 1.0
+Status ................... Baselined
+Date ..................... 18 September 2026
+Author ................... Aadit Garg (25BCE2315)
+Depends On ............... FI-TRD-001 v1.0, FI-AFL-001 v1.0
+
+================================================================================
+TABLE OF CONTENTS
+================================================================================
+
+1.  Purpose and Relationship to Other Documents
+2.  Layered Request Lifecycle
+3.  Flow 1 — Registration
+4.  Flow 2 — Authentication and Session
+5.  Flow 3 — Lost Report Creation and Match Generation
+6.  Flow 4 — Found Report Creation and Reverse Matching
+7.  Flow 5 — Browse with Filters
+8.  Flow 6 — Match Retrieval and Rendering
+9.  Flow 7 — Claim Creation
+10. Flow 8 — Claim Approval: The Critical Section
+11. Flow 9 — Handover Completion
+12. Flow 10 — Audit Trail Retrieval
+13. Flow 11 — Analytics
+14. Flow 12 — Scheduled Expiry Job
+15. Data Flow Diagrams
+16. Error Propagation
+17. Caching and Connection Management
+18. Query Plan Analysis
+19. Observability
+20. Technology Decision Record
+
+================================================================================
+1. PURPOSE AND RELATIONSHIP TO OTHER DOCUMENTS
+================================================================================
+
+The Application Flow document describes what a person experiences. This document
+describes what happens inside the machine while that experience occurs. It
+traces each significant operation from the moment a browser event fires to the
+moment bytes are written to the write-ahead log and back.
+
+Where the Application Flow says "the user taps Submit and lands on the
+confirmation screen", this document says which HTTP method is issued, what
+middleware it passes through, which service function is called, what transaction
+is opened, which relations are read and written in what order, which indexes are
+used, which locks are taken and released, what the query planner does, what is
+returned, and what happens at every point where it can fail.
+
+The Technical Requirements Document is the reference for schema, constraints and
+SQL. This document is the reference for sequence and for the interaction between
+layers. Reading them together should leave no gap.
+
+================================================================================
+2. LAYERED REQUEST LIFECYCLE
+================================================================================
+
+------------------------------------------------------------------------------
+2.1 The Common Path
+------------------------------------------------------------------------------
+
+Every authenticated request passes through the same eleven stages. Describing
+them once here means the individual flows below can start at stage 6.
+
+  1.  Browser event
+      A DOM event handler fires. Client-side validation runs. If it fails, the
+      request is never issued and the error is rendered inline.
+
+  2.  Client request construction
+      The API client attaches the Authorization header from memory, sets
+      Content-Type, and issues fetch with an AbortController so the request can
+      be cancelled on navigation.
+
+  3.  Transport
+      HTTPS to the application host.
+
+  4.  HTTP server
+      Express receives the request. The body parser enforces a 100 KB limit,
+      which is generous for JSON and prevents a trivial memory exhaustion.
+
+  5.  Middleware chain, in fixed order
+        a. Request id assignment (a UUID, echoed in every log line and in the
+           error response, so a user reporting a problem can quote it)
+        b. Structured request logging
+        c. CORS
+        d. Rate limiter, keyed by user id when authenticated and by IP when not
+        e. Authentication: JWT signature verification, expiry check, user id
+           and role extraction onto req.auth
+        f. Role gate for the route
+        g. Schema validation of params, query and body against a declared shape
+
+  6.  Controller
+      Translates the validated HTTP request into a domain call. Contains no
+      business logic and no SQL. Its only outputs are a service invocation and
+      a response shape.
+
+  7.  Service
+      Owns the transaction boundary. Orchestrates repository calls. Enforces
+      rules that span relations and cannot be expressed as constraints. Maps
+      domain errors to typed error objects.
+
+  8.  Repository
+      Holds parameterised SQL. One function per query. Returns rows. Performs
+      no interpretation.
+
+  9.  Connection pool
+      Acquires a connection from a pool capped at 20. Within a transaction the
+      same connection is used for every statement, which is not optional — a
+      transaction spread across two connections is not a transaction.
+
+  10. PostgreSQL
+      Parses, plans, executes. Acquires locks. Writes WAL. Commits.
+
+  11. Response
+      The service returns a domain object. The controller shapes it. The
+      response serialiser strips any field on the private-field deny list as a
+      final backstop. Status code is selected from the error type or defaults
+      to 200/201.
+
+------------------------------------------------------------------------------
+2.2 The Transaction Helper
+------------------------------------------------------------------------------
+
+Every multi-statement operation uses one helper, and no service opens a
+transaction by hand. Centralising this removes the two classic defects: a
+connection returned to the pool while still inside a transaction, and a rollback
+that is skipped because an exception took an unexpected path.
+
+  async function withTransaction(fn) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const result = await fn(client);
+      await client.query('COMMIT');
+      return result;
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();          // always, on every path
+    }
+  }
+
+The finally block is the important line. Without it, a thrown error leaks a
+connection, and twenty leaked connections exhaust the pool and hang the
+application in a way that looks like a database problem and is not.
+
+================================================================================
+3. FLOW 1 — REGISTRATION
+================================================================================
+
+------------------------------------------------------------------------------
+3.1 Sequence
+------------------------------------------------------------------------------
+
+  Browser                API              Service           PostgreSQL
+     │                     │                 │                   │
+     │ POST /auth/register │                 │                   │
+     ├────────────────────►│                 │                   │
+     │                     │ validate shape  │                   │
+     │                     │ rate limit      │                   │
+     │                     ├────────────────►│                   │
+     │                     │                 │ bcrypt.hash(pw,12)│
+     │                     │                 │ ~250ms CPU        │
+     │                     │                 ├──────────────────►│
+     │                     │                 │  BEGIN            │
+     │                     │                 │  INSERT users     │
+     │                     │                 │  INSERT audit_log │
+     │                     │                 │  COMMIT           │
+     │                     │                 │◄──────────────────┤
+     │                     │◄────────────────┤ user row          │
+     │                     │ sign JWT        │                   │
+     │◄────────────────────┤ 201 + token     │                   │
+
+------------------------------------------------------------------------------
+3.2 Detail
+------------------------------------------------------------------------------
+
+The bcrypt hash at cost 12 is the dominant cost of this request, around 250
+milliseconds of pure CPU. It is deliberately expensive and it runs before the
+transaction opens, never inside it. Hashing inside a transaction would hold a
+connection and potentially a lock for a quarter of a second doing work that has
+nothing to do with the database.
+
+The email uniqueness check is not performed as a SELECT before the INSERT. That
+pattern — check then insert — is a textbook race: two concurrent registrations
+both check, both find nothing, both insert, and one fails anyway. Instead the
+INSERT is attempted and the 23505 unique_violation is caught and translated. The
+database is the arbiter; the application reacts to its verdict.
+
+  ▸ SQL
+    INSERT INTO users (full_name, email, password_hash, phone, department)
+    VALUES ($1, $2, $3, $4, $5)
+    RETURNING user_id, full_name, email, role, created_at;
+
+    INSERT INTO audit_log (entity_type, entity_id, action, old_status,
+                           new_status, changed_by, detail)
+    VALUES ('USER', $1, 'CREATED', NULL, NULL, $1, 'Self-registration');
+
+Note that changed_by equals the new user's own id: the actor of a registration
+is the registrant.
+
+------------------------------------------------------------------------------
+3.3 Failure Paths
+------------------------------------------------------------------------------
+
+  23505 on uq_users_email     → 409, field error on email, transaction rolled
+                                back, no audit row written
+  23514 on ck_users_email_format → 422
+  Rate limit exceeded          → 429, request never reaches the service
+  bcrypt throws                → 500, no database work attempted
+
+================================================================================
+4. FLOW 2 — AUTHENTICATION AND SESSION
+================================================================================
+
+------------------------------------------------------------------------------
+4.1 Sign In
+------------------------------------------------------------------------------
+
+  ▸ SQL
+    SELECT user_id, password_hash, role, is_active, full_name
+      FROM users
+     WHERE lower(email) = lower($1);
+
+  Access path: Index Scan using ux_users_email_lower. The index is on the
+  expression lower(email), and the predicate must be written in exactly that
+  form or the index will not be used. Writing WHERE email = $1 with a
+  lower-cased parameter produces a sequential scan, which is a subtle and common
+  mistake.
+
+Timing equalisation. If no row is returned, the service still performs a bcrypt
+comparison against a fixed dummy hash before returning the failure. Without
+this, a non-existent email returns in 2 milliseconds and an existing email with
+a wrong password returns in 250, and the difference is a reliable oracle for
+enumerating registered addresses.
+
+------------------------------------------------------------------------------
+4.2 Token Issue and Verification
+------------------------------------------------------------------------------
+
+The access token payload carries user_id, role, issued-at and expiry, and
+nothing else. A JWT payload is base64-encoded, not encrypted; anything placed in
+it is readable by anyone holding the token.
+
+Verification on subsequent requests is signature-only and touches no database.
+This is the entire performance argument for JWTs over server-side session
+lookup: authentication adds roughly 0.1 milliseconds and zero queries per
+request.
+
+The cost of that choice is that revocation is not immediate — a token remains
+valid until it expires. FoundIt accepts this for the one-hour access token and
+compensates with server-side refresh tokens stored in a sessions relation, so
+that sign-out revokes the ability to obtain new access tokens even though it
+cannot invalidate the one already issued.
+
+------------------------------------------------------------------------------
+4.3 Role Gating
+------------------------------------------------------------------------------
+
+Role is read from the token, not from the database, on every request. A role
+change therefore takes effect at the next token refresh rather than immediately.
+This is documented rather than fixed, because the alternative — a users lookup
+on every request — costs a query per request to handle an event that occurs a
+handful of times per term.
+
+================================================================================
+5. FLOW 3 — LOST REPORT CREATION AND MATCH GENERATION
+================================================================================
+
+This is the most technically interesting flow in the product and the one whose
+performance budget is tightest.
+
+------------------------------------------------------------------------------
+5.1 Sequence
+------------------------------------------------------------------------------
+
+  POST /api/v1/lost-items
+    │
+    ├─ middleware chain (auth, validation)
+    │
+    ├─ controller: itemsController.createLost
+    │     builds a domain object from the validated body
+    │
+    └─ service: itemsService.createLostReport(userId, dto)
+          │
+          └─ withTransaction(async client => {
+               │
+               │  ── Statement 1 ──────────────────────────────────
+               │  INSERT INTO lost_items (user_id, item_name,
+               │      category_id, location_id, colour_id, brand_id,
+               │      brand_other, description, lost_date,
+               │      lost_time_from, lost_time_to)
+               │  VALUES ($1..$11)
+               │  RETURNING lost_id, status, created_at;
+               │
+               │  Constraints evaluated at this point:
+               │    fk_lost_user, fk_lost_category, fk_lost_location,
+               │    fk_lost_colour, fk_lost_brand   → 23503 if violated
+               │    ck_lost_date_not_future          → 23514 if violated
+               │    ck_lost_time_order               → 23514 if violated
+               │    ck_lost_name_nonblank            → 23514 if violated
+               │  Generated column search_vector computed by the engine.
+               │  Indexes updated: ix_lost_match_probe, ix_lost_user,
+               │                   ix_lost_location, ix_lost_fts
+               │
+               │  ── Statement 2 ──────────────────────────────────
+               │  SELECT generate_matches_for_lost($lostId);
+               │      → see 5.2 for what happens inside
+               │
+               │  ── Statement 3 ──────────────────────────────────
+               │  INSERT INTO audit_log (entity_type, entity_id, action,
+               │      old_status, new_status, changed_by)
+               │  VALUES ('LOST_ITEM', $1, 'CREATED', NULL, 'OPEN', $2);
+               │
+               │  ── Statement 4 (read-back for the response) ─────
+               │  SELECT m.match_id, m.match_score, m.match_band,
+               │         m.reason_json, f.found_id, f.item_name
+               │    FROM matches m
+               │    JOIN found_items f ON f.found_id = m.found_id
+               │   WHERE m.lost_id = $1
+               │   ORDER BY m.match_score DESC
+               │   LIMIT 1;
+               │
+               └─ COMMIT
+             })
+
+------------------------------------------------------------------------------
+5.2 Inside generate_matches_for_lost
+------------------------------------------------------------------------------
+
+Step A — read configuration.
+
+  SELECT config_value FROM match_config WHERE config_key = 'T_FLOOR';
+  SELECT config_value FROM match_config WHERE config_key='DATE_WINDOW_DAYS';
+
+Twelve rows, fully cached in shared buffers after the first call. Cost is
+effectively zero, and reading the values rather than hard-coding them is what
+makes FR-5.10 possible.
+
+Step B — build the candidate set.
+
+  FROM lost_items l
+  JOIN found_items f
+    ON  f.status = 'AVAILABLE'
+    AND f.found_date BETWEEN l.lost_date AND l.lost_date + v_window
+    AND l.user_id IS DISTINCT FROM f.user_id
+    AND ( l.category_id = f.category_id
+          OR ( l.location_id = f.location_id
+               AND l.colour_id IS NOT NULL
+               AND l.colour_id = f.colour_id ) )
+  WHERE l.lost_id = p_lost_id AND l.status = 'OPEN'
+
+The anchor predicate is in the WHERE clause, not the ON clause. This matters:
+in the WHERE clause the planner knows the outer relation produces exactly one
+row and chooses a nested loop with the found side driven by an index. Written as
+a join condition, the planner may build a hash of the entire found_items table
+first, which is correct but far slower.
+
+The three pre-filters reduce the candidate space multiplicatively:
+
+  Starting population                          10,000 available found items
+  × status filter (already in the partial index)   — free, the index is the set
+  × 30-day date window                          ≈ 1/12 → ~830 rows
+  × category equality (≈20 categories)          ≈ 1/20 → ~42 rows
+  ───────────────────────────────────────────────────────────────
+  Rows actually scored                                     ~42
+
+Forty-two CASE evaluations is trivial. The entire performance of this flow rests
+on the pre-filters, not on the scoring expression, and that is the point to
+articulate: the expensive part of a matching system is finding the candidates,
+not comparing them.
+
+Step C — score, band and persist.
+
+The INSERT ... SELECT with the join to score_bands and the ON CONFLICT clause
+described in TRD section 9.4. The ON CONFLICT is what makes a re-run after an
+edit safe: existing rows are updated in place, and rows whose status has moved
+past SUGGESTED are left alone by the DO UPDATE's WHERE clause.
+
+Step D — return the affected row count.
+
+------------------------------------------------------------------------------
+5.3 Timing Budget
+------------------------------------------------------------------------------
+
+  Stage                                    Budget    Typical
+  ---------------------------------------  --------  --------
+  Middleware and validation                  2 ms      1 ms
+  BEGIN                                      1 ms     <1 ms
+  INSERT lost_items + 4 index updates        8 ms      5 ms
+  Config reads (cached)                      1 ms     <1 ms
+  Candidate scan and score                  80 ms     35 ms
+  INSERT matches (typically 0–5 rows)       10 ms      4 ms
+  INSERT audit_log                           4 ms      2 ms
+  Read-back top match                        4 ms      2 ms
+  COMMIT (WAL flush)                        10 ms      6 ms
+  Serialisation and response                 3 ms      2 ms
+  ---------------------------------------  --------  --------
+  Total                                    123 ms     58 ms
+
+Against the NFR-1.1 budget of 200 milliseconds this leaves comfortable headroom,
+which is deliberate: the budget must hold at ten times the demonstration data
+volume, not merely at the demonstration volume.
+
+------------------------------------------------------------------------------
+5.4 Why This Is One Transaction
+------------------------------------------------------------------------------
+
+Four writes across three relations commit together. The properties this buys:
+
+A report never exists without its audit row. The consistency query Q8 from the
+TRD would otherwise find orphans.
+
+A report never exists without its matches having been computed. A user never
+sees an empty match list that means "we have not looked yet" rather than "we
+looked and found nothing" — a distinction that cannot be communicated if both
+states look identical.
+
+A failure anywhere leaves nothing behind. A constraint violation on the audit
+insert rolls back the report and its matches, and the user is told the
+submission failed rather than being left with a half-created record.
+
+The cost is a transaction held open for roughly 60 milliseconds. At 100
+concurrent users that is well within the connection pool's capacity.
+
+================================================================================
+6. FLOW 4 — FOUND REPORT CREATION AND REVERSE MATCHING
+================================================================================
+
+Structurally identical to Flow 3 with the anchor on the other side, but three
+differences are worth tracing.
+
+------------------------------------------------------------------------------
+6.1 Additional Validation
+------------------------------------------------------------------------------
+
+Before the transaction opens, the service checks that private_feature is not a
+case-insensitive, whitespace-normalised match for description. This rule cannot
+be a CHECK constraint in a useful form — it is a fuzzy comparison — so it lives
+in the service with a clear error code, PRIVATE_DUPLICATES_PUBLIC, mapped to
+422.
+
+The constraint ck_found_storage is left to the database: custody other than
+WITH_FINDER requires a storage_location. The client hides or shows the field,
+the service does not re-check it, and the database refuses a malformed row. This
+is the intended division of labour — the client makes the rule pleasant, the
+database makes it true.
+
+------------------------------------------------------------------------------
+6.2 Reverse Matching
+------------------------------------------------------------------------------
+
+  FROM found_items f
+  JOIN lost_items l
+    ON  l.status = 'OPEN'
+    AND f.found_date BETWEEN l.lost_date AND l.lost_date + v_window
+    ...
+  WHERE f.found_id = p_found_id AND f.status = 'AVAILABLE'
+
+The date predicate is written with the same orientation as in the forward
+direction — found_date between lost_date and lost_date + window — because the
+semantic relationship is fixed regardless of which side is the anchor. Inverting
+it to lost_date BETWEEN found_date - window AND found_date would be arithmetically
+equivalent but would prevent the planner from using ix_lost_match_probe, since
+the indexed column would then be inside an expression.
+
+The candidate population here is larger, because OPEN lost items outnumber
+AVAILABLE found items by roughly 2.5 to 1 in the projected volumes. The timing
+budget is correspondingly looser but still within NFR-1.1.
+
+------------------------------------------------------------------------------
+6.3 Response Shaping
+------------------------------------------------------------------------------
+
+The finder's response deliberately omits the matched owners' identities. It
+reports a count only:
+
+  { "found_id": 204, "status": "AVAILABLE",
+    "potential_owners": 1,
+    "custody_instruction": "Please hand this in at the Security Desk..." }
+
+This is a privacy decision enforced at the response shape rather than at the
+query: the query returns match rows, the controller counts them and discards the
+rest. A stricter implementation would not select them at all, and that is the
+version to prefer if the code is revisited.
+
+================================================================================
+7. FLOW 5 — BROWSE WITH FILTERS
+================================================================================
+
+------------------------------------------------------------------------------
+7.1 Dynamic Predicate Construction
+------------------------------------------------------------------------------
+
+Filters are optional and combinable, which invites string concatenation and
+therefore invites injection. The technique used instead builds a parameter array
+alongside a predicate array, so that every user value remains a bound parameter.
+
+  const where = ["f.status = 'AVAILABLE'"];
+  const params = [];
+
+  if (q.categories?.length) {
+    params.push(q.categories);
+    where.push(`f.category_id = ANY($${params.length}::int[])`);
+  }
+  if (q.buildings?.length) {
+    params.push(q.buildings);
+    where.push(`l.building = ANY($${params.length}::text[])`);
+  }
+  if (q.colours?.length) {
+    params.push(q.colours);
+    where.push(`f.colour_id = ANY($${params.length}::int[])`);
+  }
+  if (q.since) {
+    params.push(q.since);
+    where.push(`f.found_date >= $${params.length}`);
+  }
+  if (q.search) {
+    params.push(q.search);
+    where.push(`f.search_vector @@ plainto_tsquery('english',
+                $${params.length})`);
+  }
+
+  const sql = `
+    SELECT f.found_id, f.item_name, c.category_name, col.colour_name,
+           col.hex_value, b.brand_name, l.building, l.location_name,
+           f.found_date, CURRENT_DATE - f.found_date AS days_in_system,
+           count(*) OVER () AS total_count
+      FROM found_items f
+      JOIN categories c ON c.category_id = f.category_id
+      JOIN locations  l ON l.location_id = f.location_id
+      LEFT JOIN colours col ON col.colour_id = f.colour_id
+      LEFT JOIN brands  b   ON b.brand_id   = f.brand_id
+     WHERE ${where.join(' AND ')}
+     ORDER BY ${SORT[q.sort] ?? SORT.date}
+     LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+
+The ORDER BY is the one place a user-supplied value influences SQL text, and it
+does so only through a lookup in a fixed SORT map. The user's string is a key,
+never a fragment.
+
+------------------------------------------------------------------------------
+7.2 The Window Function Trick
+------------------------------------------------------------------------------
+
+count(*) OVER () returns the total row count before LIMIT is applied, delivered
+on every row. This gives the interface its "148 items" figure from the same query
+that fetches the page, rather than from a second COUNT query with a duplicated
+WHERE clause that will eventually drift out of sync with the first.
+
+The cost is that the planner must materialise the full filtered set to compute
+the window, which forfeits the early-termination optimisation that LIMIT would
+otherwise allow. At the projected data volumes this is the right trade; at a
+million rows it would not be, and the alternative would be an approximate count
+from the planner's own estimate.
+
+------------------------------------------------------------------------------
+7.3 Pagination
+------------------------------------------------------------------------------
+
+LIMIT and OFFSET, page size 24. OFFSET pagination degrades linearly — page 100
+requires the engine to produce and discard 2,376 rows — and keyset pagination
+would avoid that. It is not used here because the browse list is ordered by
+found_date descending and page 100 does not exist in practice. The decision is
+recorded so that it reads as a considered trade rather than an omission, and the
+migration path (WHERE found_date < $lastSeen) is noted for a future version.
+
+================================================================================
+8. FLOW 6 — MATCH RETRIEVAL AND RENDERING
+================================================================================
+
+------------------------------------------------------------------------------
+8.1 Query
+------------------------------------------------------------------------------
+
+  SELECT m.match_id, m.match_score, m.match_band, m.reason_json, m.status,
+         f.found_id, f.item_name, f.found_date, f.custody,
+         fl.location_name AS found_location, fl.building,
+         col.colour_name, col.hex_value, b.brand_name,
+         c.category_name
+    FROM matches m
+    JOIN lost_items  l  ON l.lost_id  = m.lost_id
+    JOIN found_items f  ON f.found_id = m.found_id
+    JOIN locations  fl  ON fl.location_id = f.location_id
+    JOIN categories  c  ON c.category_id = f.category_id
+    LEFT JOIN colours col ON col.colour_id = f.colour_id
+    LEFT JOIN brands  b   ON b.brand_id   = f.brand_id
+   WHERE m.lost_id = $1
+     AND l.user_id = $2
+     AND m.status  = 'SUGGESTED'
+   ORDER BY m.match_score DESC, m.created_at DESC;
+
+------------------------------------------------------------------------------
+8.2 The Authorisation Predicate
+------------------------------------------------------------------------------
+
+l.user_id = $2 is the ownership check, and its placement in the WHERE clause
+rather than in application code is the whole security design of this endpoint. A
+request for another user's matches returns zero rows and therefore 404, with no
+branch in the application that could be forgotten.
+
+Note also that the authorisation is on the lost side only. The finder does not
+see matches on items they found, which is intentional: the next move in the
+protocol belongs to the owner, and showing the finder a list of people who might
+own the item invites them to make contact outside the verification process.
+
+------------------------------------------------------------------------------
+8.3 Rendering Contract
+------------------------------------------------------------------------------
+
+reason_json travels to the client untouched and is rendered element by element.
+The client does not sum the points, does not recompute the band, and does not
+derive a percentage. The stored total is displayed.
+
+This is a small discipline with a specific payoff: if the weights are retuned
+next term, a match scored in September still displays the September breakdown
+and the September total, and the two still agree. A client that recomputed would
+show a breakdown that contradicts its own stored score.
+
+================================================================================
+9. FLOW 7 — CLAIM CREATION
+================================================================================
+
+------------------------------------------------------------------------------
+9.1 Guard Sequence
+------------------------------------------------------------------------------
+
+Five guards, in ascending order of cost, so the cheapest rejection happens
+first.
+
+  G1  Token present and valid                      middleware, no query
+  G2  proof_text at least 10 characters            validation, no query
+  G3  Caller owns the lost item in the match        one indexed lookup
+  G4  Found item still AVAILABLE                    same lookup, same row
+  G5  Caller has fewer than 3 pending claims        one indexed count
+
+  ▸ SQL for G3 and G4 combined
+    SELECT m.match_id, m.lost_id, m.found_id, f.status AS found_status,
+           f.user_id AS finder_id, cat.requires_staff
+      FROM matches m
+      JOIN lost_items  l ON l.lost_id  = m.lost_id
+      JOIN found_items f ON f.found_id = m.found_id
+      JOIN categories cat ON cat.category_id = f.category_id
+     WHERE m.match_id = $1 AND l.user_id = $2;
+
+One query answers ownership, availability, finder identity and verification
+routing. Four round trips collapsed into one is worth the slightly wider SELECT.
+
+------------------------------------------------------------------------------
+9.2 Transaction
+------------------------------------------------------------------------------
+
+  BEGIN;
+    SELECT count(*) FROM claims
+     WHERE claimant_id = $1 AND status = 'PENDING';
+    -- if >= MAX_PENDING_CLAIMS, raise TOO_MANY_PENDING_CLAIMS
+
+    INSERT INTO claims (match_id, claimant_id, proof_text, status)
+    VALUES ($1, $2, $3, 'PENDING')
+    RETURNING claim_id;
+    -- trg_claims_denormalise_found fires: populates found_id from the match
+    -- trg_no_self_claim fires: raises 23514 if claimant_id = finder_id
+
+    UPDATE matches SET status = 'CLAIMED', updated_at = NOW()
+     WHERE match_id = $1;
+
+    INSERT INTO audit_log (entity_type, entity_id, action, old_status,
+                           new_status, changed_by)
+    VALUES ('CLAIM', $claimId, 'CLAIM_CREATED', NULL, 'PENDING', $2);
+  COMMIT;
+
+------------------------------------------------------------------------------
+9.3 Trigger Order and Why It Matters
+------------------------------------------------------------------------------
+
+Both BEFORE INSERT triggers fire before the row is written, and
+trg_claims_denormalise_found must fire before trg_no_self_claim, because the
+latter reads NEW.found_id. PostgreSQL fires triggers of the same type in
+alphabetical order by name, which is why the names were chosen as they were:
+"claims_denormalise" sorts before "no_self_claim". This is a genuine dependency
+on an implementation detail and it is documented in the migration file as a
+comment, because a future rename would break it silently.
+
+------------------------------------------------------------------------------
+9.4 What Is Not Checked Here
+------------------------------------------------------------------------------
+
+The claim creation path does not check whether another claim is already pending
+on the same found item. Multiple pending claims are explicitly permitted by
+FR-6.5, and the contention is resolved at approval time by the transaction in
+Flow 8. Resolving it here would require locking the found item during claim
+creation, which would serialise an operation that has no need to be serialised.
+
+The distinction between where contention must be resolved and where it need not
+be is the most useful concurrency lesson in the whole project: lock at the point
+of the invariant, not at every point that touches the data.
+
+================================================================================
+10. FLOW 8 — CLAIM APPROVAL: THE CRITICAL SECTION
+================================================================================
+
+------------------------------------------------------------------------------
+10.1 Concurrent Timeline
+------------------------------------------------------------------------------
+
+Two verifiers approving two different claims on found item 204 at the same
+instant.
+
+  t     Transaction A                      Transaction B
+  ───   ────────────────────────────────   ────────────────────────────────
+  0ms   BEGIN
+  1ms   SELECT ... found_id=204 FOR UPDATE
+        → acquires RowExclusiveLock
+        → reads status = 'AVAILABLE'
+  2ms                                      BEGIN
+  3ms                                      SELECT ... found_id=204 FOR UPDATE
+                                           → BLOCKS, waits for A
+  5ms   status check passes
+  6ms   UPDATE claims SET APPROVED
+  8ms   UPDATE found_items SET CLAIMED
+ 10ms   UPDATE lost_items SET MATCHED
+ 12ms   UPDATE competing claims → REJECTED
+ 14ms   UPDATE matches → CONFIRMED/INVALIDATED
+ 16ms   INSERT audit_log × 3
+ 18ms   COMMIT → WAL flush, locks released
+ 19ms                                      → UNBLOCKS
+                                           → re-reads the row under READ
+                                             COMMITTED, sees 'CLAIMED'
+ 20ms                                      status check FAILS
+                                           RAISE ITEM_NOT_AVAILABLE
+ 21ms                                      ROLLBACK
+ 22ms                                      API returns 409
+
+------------------------------------------------------------------------------
+10.2 The Two Subtleties
+------------------------------------------------------------------------------
+
+First: why B sees the new value. Under READ COMMITTED, a statement blocked on a
+row lock re-evaluates the row against the newest committed version once the lock
+is released. This is specific to locking reads and updates; an ordinary SELECT
+in the same transaction would still see the snapshot taken at statement start.
+Relying on this behaviour without understanding it is how people write code that
+works on PostgreSQL and breaks elsewhere, so the behaviour is stated explicitly
+rather than assumed.
+
+Second: why B's claim was already rejected by A's step 7, yet B still gets a
+409 rather than a "claim not pending" error. Both are correct errors; the order
+of the checks determines which one surfaces. The implementation checks item
+availability before claim status precisely so that the message describes the
+item's fate rather than the claim's, which is what the verifier needs to
+understand.
+
+------------------------------------------------------------------------------
+10.3 Lock Scope and Duration
+------------------------------------------------------------------------------
+
+Exactly one row is locked explicitly: the found_items row. The UPDATE statements
+take their own row locks implicitly, in the fixed order defined in TRD section
+10.5, which is what makes deadlock impossible by construction.
+
+Total lock duration is 17 milliseconds. Nothing expensive happens inside the
+lock: no hashing, no HTTP call, no template rendering, no logging to a remote
+sink. The rule "never do slow things while holding a lock" is easy to state and
+easy to violate by adding an audit-email call in the middle of a transaction six
+weeks later.
+
+------------------------------------------------------------------------------
+10.4 The Backstop
+------------------------------------------------------------------------------
+
+If the FOR UPDATE were deleted tomorrow by a careless refactor, the system would
+still be correct, because ux_one_approved_claim_per_found is a unique index on
+claims(found_id) WHERE status IN ('APPROVED','COMPLETED'). B's UPDATE to
+APPROVED would violate it and raise 23505.
+
+The error would be worse — a unique violation is harder to translate into a
+comprehensible message than a raised domain exception — but the data would be
+correct. Correctness that does not depend on application code being right is the
+only kind worth relying on.
+
+------------------------------------------------------------------------------
+10.5 Full Statement Sequence with Relations Touched
+------------------------------------------------------------------------------
+
+  1  SELECT found_items       FOR UPDATE        lock acquired
+  2  (in-memory status check)                   no I/O
+  3  SELECT claims            FOR UPDATE        lock acquired
+  4  UPDATE claims            1 row             ux index checked
+  5  UPDATE found_items       1 row             ix_found_browse updated
+  6  UPDATE lost_items        1 row             ix_lost_match_probe updated
+  7  UPDATE claims            0..n rows         competing claims rejected
+  8  UPDATE matches           1 row + 0..n      CONFIRMED / INVALIDATED
+  9  INSERT audit_log         3 rows            ix_audit_entity updated
+ 10  COMMIT                                     WAL flush, all locks released
+
+================================================================================
+11. FLOW 9 — HANDOVER COMPLETION
+================================================================================
+
+  BEGIN;
+    SELECT c.claim_id, c.found_id, m.lost_id, c.status
+      FROM claims c JOIN matches m ON m.match_id = c.match_id
+     WHERE c.claim_id = $1
+       AND (c.claimant_id = $2 OR EXISTS (
+              SELECT 1 FROM found_items f
+               WHERE f.found_id = c.found_id AND f.user_id = $2))
+       FOR UPDATE OF c;
+
+    -- authorisation and state check in one statement:
+    -- zero rows means either not a party or not found → 404
+    -- status <> 'APPROVED' → 409
+
+    UPDATE claims      SET status='COMPLETED', completed_at=NOW()
+                     WHERE claim_id = $1;
+    UPDATE found_items SET status='RETURNED',  returned_at=NOW()
+                     WHERE found_id = $2;
+    UPDATE lost_items  SET status='RESOLVED',  resolved_at=NOW()
+                     WHERE lost_id  = $3;
+    INSERT INTO audit_log (...) VALUES (three rows);
+  COMMIT;
+
+The two biconditional CHECK constraints — ck_found_returned_consistent and
+ck_lost_resolved_consistent — are evaluated on statements 2 and 3. If a
+developer ever writes the status update without the timestamp, or vice versa,
+the transaction fails at write time rather than producing a row that is quietly
+wrong. This is the payoff for writing those constraints, and it is worth pointing
+at during a demonstration: the schema catches a class of bug that no amount of
+application testing reliably finds.
+
+FOR UPDATE OF c locks only the claims row, not every row produced by the join.
+Locking the joined found_items and matches rows unnecessarily would widen the
+lock footprint and create a deadlock opportunity with Flow 8, which locks
+found_items first.
+
+================================================================================
+12. FLOW 10 — AUDIT TRAIL RETRIEVAL
+================================================================================
+
+  SELECT a.audit_id, a.action, a.old_status, a.new_status, a.detail,
+         a.changed_at, coalesce(u.full_name, 'System') AS actor
+    FROM audit_log a
+    LEFT JOIN users u ON u.user_id = a.changed_by
+   WHERE a.entity_type = $1 AND a.entity_id = $2
+   ORDER BY a.changed_at, a.audit_id;
+
+  Access path: Index Scan using ix_audit_entity (entity_type, entity_id,
+  changed_at). The index's column order matches the predicate and the sort, so
+  the rows arrive pre-ordered and no sort node appears in the plan.
+
+The secondary sort on audit_id is not cosmetic. Rows written inside one
+transaction share an identical changed_at, because NOW() is transaction-stable
+in PostgreSQL. The claim approval transaction writes three audit rows with the
+same timestamp; without the audit_id tiebreaker their display order would be
+whatever the storage engine happened to return, and the timeline would
+occasionally show the item being claimed before the claim was approved.
+
+Authorisation is a separate preceding query establishing that the caller is a
+party to the entity — reporter, finder, claimant or staff. It is not folded into
+the audit query because the party test differs by entity_type, and a single
+query with a three-way conditional would be less readable than three explicit
+branches.
+
+================================================================================
+13. FLOW 11 — ANALYTICS
+================================================================================
+
+------------------------------------------------------------------------------
+13.1 Execution Model
+------------------------------------------------------------------------------
+
+Every analytic is a SELECT from a view. No aggregation is performed in
+application code. This is both a correctness property — the figure the dashboard
+shows is the figure the database computed — and a demonstration property: the
+examiner can run the same view in psql and get the same number.
+
+------------------------------------------------------------------------------
+13.2 Cost Profile
+------------------------------------------------------------------------------
+
+  View                 Rows scanned    Typical    Plan shape
+  -------------------  --------------  ---------  ----------------------------
+  v_recovery_stats     all lost_items    120 ms   Seq Scan + HashAggregate
+                                                  + WindowAgg for percentile
+  v_loss_hotspots      all lost_items     90 ms   Seq Scan + HashAggregate
+                       + locations                + 2 WindowAgg
+  category divergence  both item tables   70 ms   2 HashAggregate + Hash Join
+  match conversion     matches + claims  110 ms   Hash Join + HashAggregate
+  ageing report        found_items        15 ms   Index Scan on ix_found_browse
+
+The sequential scans here are correct and should not be indexed away. An
+aggregate over the whole table genuinely must read the whole table, and an index
+scan that visits every row plus the heap is slower than a sequential scan that
+reads pages in order. Recognising when a Seq Scan is the right plan is as
+important as recognising when it is not, and this is the place in the project
+where that distinction is demonstrable.
+
+------------------------------------------------------------------------------
+13.3 The Percentile
+------------------------------------------------------------------------------
+
+  percentile_cont(0.5) WITHIN GROUP (
+      ORDER BY EXTRACT(EPOCH FROM (l.resolved_at - l.created_at))/86400)
+
+An ordered-set aggregate, distinct from an ordinary aggregate in that it
+requires its input sorted. Median is chosen over mean deliberately: time to
+recovery has a long right tail — one item recovered after 60 days drags a mean
+computed over 40 items recovered in 2 days from 2.0 to 3.4 — and the median
+describes the typical experience while the mean describes an experience nobody
+had.
+
+================================================================================
+14. FLOW 12 — SCHEDULED EXPIRY JOB
+================================================================================
+
+Runs daily at 03:00 local time.
+
+  loop
+    BEGIN;
+      WITH batch AS (
+          SELECT lost_id FROM lost_items
+           WHERE status = 'OPEN'
+             AND created_at < NOW() - ($1 || ' days')::interval
+           ORDER BY lost_id
+           LIMIT 500
+           FOR UPDATE SKIP LOCKED
+      )
+      UPDATE lost_items l
+         SET status = 'EXPIRED', updated_at = NOW()
+        FROM batch b
+       WHERE l.lost_id = b.lost_id
+      RETURNING l.lost_id;
+
+      INSERT INTO audit_log (entity_type, entity_id, action, old_status,
+                             new_status, changed_by, detail)
+      SELECT 'LOST_ITEM', lost_id, 'EXPIRED', 'OPEN', 'EXPIRED', NULL,
+             'Automatic expiry after retention period'
+        FROM updated_ids;
+
+      UPDATE matches SET status = 'INVALIDATED'
+       WHERE lost_id IN (SELECT lost_id FROM updated_ids)
+         AND status = 'SUGGESTED';
+    COMMIT;
+  until zero rows returned
+
+Three design points.
+
+Batching at 500 rows keeps each transaction short. A single transaction over
+thirty thousand rows would hold locks for seconds and block user traffic.
+
+SKIP LOCKED means a row already locked by a user transaction is passed over
+rather than waited on. The job will catch it tomorrow. A background job should
+never block a user, and this single clause is what guarantees it.
+
+changed_by is NULL, which is why the audit_log foreign key permits nulls. The
+timeline renders it as "System" via the coalesce in v_item_timeline.
+
+================================================================================
+15. DATA FLOW DIAGRAMS
+================================================================================
+
+------------------------------------------------------------------------------
+15.1 Level 0 — Context
+------------------------------------------------------------------------------
+
+        ┌──────────┐                      ┌──────────┐
+        │ Student  │                      │  Staff   │
+        └────┬─────┘                      └────┬─────┘
+             │ reports, claims                 │ intake, verification
+             ▼                                 ▼
+        ┌──────────────────────────────────────────────┐
+        │                                              │
+        │              FOUNDIT SYSTEM                  │
+        │                                              │
+        └──────────────────────────────────────────────┘
+             ▲                                 ▲
+             │ matches, decisions              │ analytics
+        ┌────┴─────┐                      ┌────┴─────┐
+        │ Student  │                      │  Admin   │
+        └──────────┘                      └──────────┘
+
+------------------------------------------------------------------------------
+15.2 Level 1 — Processes and Stores
+------------------------------------------------------------------------------
+
+  Student ──report lost──► ┌─────────────────┐
+                           │ P1 Capture Lost │──► D1 lost_items
+                           └────────┬────────┘
+                                    │ triggers
+                                    ▼
+  Student ──report found─► ┌─────────────────┐ ◄── D2 found_items
+                           │ P2 Match Engine │
+                           └────────┬────────┘
+                                    │
+                                    ▼
+                                 D3 matches
+                                    │
+                                    ▼
+                           ┌─────────────────┐
+  Student ──claim + proof► │ P3 Claim        │──► D4 claims
+                           └────────┬────────┘
+                                    │
+                                    ▼
+                           ┌─────────────────┐
+  Finder  ──decision─────► │ P4 Verify       │──► D4 claims (update)
+                           └────────┬────────┘    D2 found_items (update)
+                                    │             D1 lost_items (update)
+                                    ▼
+                                 D5 audit_log  ◄── every process writes here
+
+  Admin   ◄──figures────── ┌─────────────────┐ ◄── D1, D2, D3, D4
+                           │ P5 Analytics    │
+                           └─────────────────┘
+
+  Reference stores D6 locations, D7 categories, D8 colours, D9 brands are read
+  by P1, P2 and P5 and written only by administration.
+
+------------------------------------------------------------------------------
+15.3 The Matching Process, Expanded
+------------------------------------------------------------------------------
+
+   New report
+       │
+       ▼
+  ┌──────────────────┐     reads     ┌────────────────┐
+  │ Read config      │ ◄──────────── │ D10 match_config│
+  └────────┬─────────┘               └────────────────┘
+           ▼
+  ┌──────────────────┐     reads     ┌────────────────┐
+  │ Pre-filter       │ ◄──────────── │ D1 / D2         │
+  │ · status         │               └────────────────┘
+  │ · date window    │
+  │ · min agreement  │
+  │ · distinct users │
+  └────────┬─────────┘
+           │  ~42 candidates
+           ▼
+  ┌──────────────────┐
+  │ Score            │
+  │ cat 20 · brand 20│
+  │ loc 20 · col 15  │
+  │ date 0–15        │
+  │ desc 0–10        │
+  └────────┬─────────┘
+           ▼
+  ┌──────────────────┐     reads     ┌────────────────┐
+  │ Band             │ ◄──────────── │ D11 score_bands │
+  └────────┬─────────┘               └────────────────┘
+           ▼
+  ┌──────────────────┐
+  │ Filter ≥ floor   │
+  └────────┬─────────┘
+           ▼
+  ┌──────────────────┐   ON CONFLICT ┌────────────────┐
+  │ Persist          │ ────────────► │ D3 matches      │
+  └──────────────────┘   DO UPDATE   └────────────────┘
+
+================================================================================
+16. ERROR PROPAGATION
+================================================================================
+
+------------------------------------------------------------------------------
+16.1 The Chain
+------------------------------------------------------------------------------
+
+  PostgreSQL error (SQLSTATE)
+      ▼
+  Repository: catches, wraps in DatabaseError carrying the SQLSTATE and the
+              constraint name, rethrows. Does not interpret.
+      ▼
+  Service:    maps SQLSTATE + constraint name to a typed domain error with a
+              stable code. Adds domain context. Rethrows.
+      ▼
+  Controller: does not catch. Errors propagate to the error middleware.
+      ▼
+  Error middleware: maps the domain error code to an HTTP status and a
+              user-facing message. Logs with the request id. Strips internals.
+      ▼
+  Client:     renders inline for field errors, toast for transient errors,
+              modal for errors requiring a decision.
+
+------------------------------------------------------------------------------
+16.2 Mapping Table
+------------------------------------------------------------------------------
+
+  SQLSTATE / constraint              Domain code              HTTP  Surface
+  ---------------------------------  -----------------------  ----  ----------
+  23505 uq_users_email               EMAIL_IN_USE             409   field
+  23505 uq_match_pair                MATCH_EXISTS             409   silent
+  23505 ux_one_approved_claim...     ALREADY_CLAIMED          409   modal
+  23503 fk_lost_category             INVALID_CATEGORY         422   field
+  23503 fk_lost_location             INVALID_LOCATION         422   field
+  23514 ck_lost_date_not_future      DATE_IN_FUTURE           422   field
+  23514 ck_found_storage             STORAGE_REQUIRED         422   field
+  23514 ck_claim_proof_nonblank      PROOF_TOO_SHORT          422   field
+  23514 trg_no_self_claim            CANNOT_CLAIM_OWN_FIND    403   modal
+  23502 any                          MISSING_FIELD            400   field
+  P0001 ITEM_NOT_AVAILABLE           ITEM_NOT_AVAILABLE       409   modal
+  P0001 CLAIM_NOT_PENDING            CLAIM_NOT_PENDING        409   modal
+  40001 serialization_failure        RETRY                    —     retry once
+  40P01 deadlock_detected            RETRY                    —     retry once
+  57014 query_canceled               TIMEOUT                  503   toast
+
+------------------------------------------------------------------------------
+16.3 The Silent Case
+------------------------------------------------------------------------------
+
+MATCH_EXISTS is marked silent because it should never reach a user. The matching
+procedure's ON CONFLICT clause handles the duplicate internally. If the code
+ever surfaces, it indicates that a code path is inserting into matches without
+the conflict clause, which is a defect to be logged at error level and
+investigated rather than shown to anyone.
+
+------------------------------------------------------------------------------
+16.4 Retry Policy
+------------------------------------------------------------------------------
+
+Serialisation failures and deadlocks are retried exactly once, with a 50
+millisecond jittered delay, and only for idempotent operations. Claim approval
+is not retried automatically, because a retry after an unknown outcome could
+approve a claim the user did not intend to approve twice; instead the user is
+shown the conflict and the current state.
+
+================================================================================
+17. CACHING AND CONNECTION MANAGEMENT
+================================================================================
+
+------------------------------------------------------------------------------
+17.1 What Is Cached
+------------------------------------------------------------------------------
+
+Reference data only — categories, locations, colours, brands, score bands and
+match config — loaded into application memory at boot and refreshed on any admin
+write through an in-process invalidation. Together these are under 200 rows and
+a few kilobytes.
+
+Nothing else is cached. Item data, match data and claim data are read from the
+database on every request. At the projected volumes the indexes make this fast
+enough, and a cache over mutable data would introduce staleness into exactly the
+screens where staleness is most damaging: a user looking at a match list that
+was computed before their own edit.
+
+------------------------------------------------------------------------------
+17.2 Client Caching
+------------------------------------------------------------------------------
+
+Reference data is fetched once per session and held in client memory.
+GET responses for browse carry Cache-Control: private, max-age=30, which
+absorbs the duplicate requests produced by rapid filter toggling without ever
+serving genuinely stale data to a different user.
+
+Match and claim endpoints carry Cache-Control: no-store. A cached claim status
+in a shared browser would be a privacy problem, not merely a correctness one.
+
+------------------------------------------------------------------------------
+17.3 Pool Configuration
+------------------------------------------------------------------------------
+
+  max: 20                       Comfortably above the concurrency requirement
+  idleTimeoutMillis: 30000      Release idle connections
+  connectionTimeoutMillis: 5000 Fail fast rather than queueing indefinitely
+  statement_timeout: 10000      Set per session; no query runs beyond 10s
+
+The statement timeout is the safety net for a pathological query. Without it,
+one bad plan can hold a connection indefinitely, and twenty such queries stop
+the application entirely.
+
+================================================================================
+18. QUERY PLAN ANALYSIS
+================================================================================
+
+------------------------------------------------------------------------------
+18.1 The Match Query, Before Indexing
+------------------------------------------------------------------------------
+
+  Nested Loop  (cost=0.29..4821.44 rows=38 width=96)
+                                    (actual time=0.41..312.88 rows=42 loops=1)
+    ->  Index Scan using lost_items_pkey on lost_items l
+          (actual time=0.02..0.03 rows=1 loops=1)
+          Index Cond: (lost_id = 101)
+    ->  Seq Scan on found_items f
+          (actual time=0.09..310.44 rows=42 loops=1)
+          Filter: ((status = 'AVAILABLE') AND (found_date >= ...) AND ...)
+          Rows Removed by Filter: 9958
+          Buffers: shared hit=1204 read=88
+  Planning Time: 0.44 ms
+  Execution Time: 313.21 ms
+
+The diagnosis is in one line: Rows Removed by Filter: 9958. The engine examined
+ten thousand rows to keep forty-two. Every page of found_items was read.
+
+------------------------------------------------------------------------------
+18.2 After Creating ix_found_match_probe
+------------------------------------------------------------------------------
+
+  CREATE INDEX ix_found_match_probe
+      ON found_items (category_id, found_date, status)
+      WHERE status = 'AVAILABLE';
+
+  Nested Loop  (cost=4.79..412.66 rows=38 width=96)
+                                     (actual time=0.38..28.91 rows=42 loops=1)
+    ->  Index Scan using lost_items_pkey on lost_items l
+          (actual time=0.02..0.02 rows=1 loops=1)
+    ->  Bitmap Heap Scan on found_items f
+          (actual time=0.31..28.44 rows=42 loops=1)
+          Recheck Cond: ((category_id = l.category_id)
+                         AND (found_date >= l.lost_date)
+                         AND (found_date <= l.lost_date + 30))
+          Heap Blocks: exact=39
+          ->  Bitmap Index Scan on ix_found_match_probe
+                (actual time=0.14..0.14 rows=42 loops=1)
+          Buffers: shared hit=47
+  Planning Time: 0.51 ms
+  Execution Time: 29.22 ms
+
+A 10.7× improvement, and the buffer count tells the real story: 1,292 buffer
+accesses became 47. The query went from reading the table to reading forty-seven
+pages.
+
+Two details worth noticing. The index is partial, so it contains only AVAILABLE
+rows — as the system accumulates history this index stays small while the table
+grows, and the gap widens over time. And "Rows Removed by Filter" has vanished
+entirely, which is the signal that the predicate is being satisfied by the index
+rather than by post-filtering.
+
+------------------------------------------------------------------------------
+18.3 Anti-Pattern: The Index That Is Not Used
+------------------------------------------------------------------------------
+
+A plausible-looking alternative index:
+
+  CREATE INDEX ix_found_date_cat ON found_items (found_date, category_id);
+
+This index is never chosen by the planner for the match query, and the reason is
+column order. The leading column carries a range predicate (found_date between
+two values), and a B-tree can use only the leading column's range plus equality
+on nothing beyond it. With category_id second, the index scan must read every
+entry in the date range and filter on category afterwards.
+
+Reversing the order puts the equality predicate first, so the scan descends
+directly to the category and then walks the date range within it. The general
+rule — equality columns before range columns in a composite index — is the
+single most useful index-design heuristic there is, and this pair of indexes is
+the cleanest available demonstration of it.
+
+------------------------------------------------------------------------------
+18.4 The Browse Query Plan
+------------------------------------------------------------------------------
+
+  Limit  (actual time=12.44..12.71 rows=24 loops=1)
+    ->  WindowAgg  (actual time=12.42..12.66 rows=24 loops=1)
+          ->  Sort  (actual time=12.40..12.44 rows=148 loops=1)
+                Sort Key: f.found_date DESC
+                Sort Method: quicksort  Memory: 41kB
+                ->  Hash Left Join  (actual time=1.02..11.88 rows=148)
+                      ->  Hash Join  (actual time=0.88..10.44 rows=148)
+                            ->  Bitmap Heap Scan on found_items f
+                                  Recheck Cond: (status = 'AVAILABLE')
+                                  ->  Bitmap Index Scan on ix_found_browse
+  Execution Time: 12.93 ms
+
+The Sort node is present because count(*) OVER () forces materialisation of the
+full filtered set before the window can be computed. This is the cost noted in
+section 7.2, and it is visible in the plan — which is the point of reading
+plans. At 148 rows the sort costs 40 kilobytes and half a millisecond; at
+100,000 rows it would spill to disk and the trade would need revisiting.
+
+================================================================================
+19. OBSERVABILITY
+================================================================================
+
+------------------------------------------------------------------------------
+19.1 Structured Logging
+------------------------------------------------------------------------------
+
+  { "ts": "2026-09-11T09:15:22.441Z",
+    "level": "info",
+    "req_id": "0f3c2a9e-...",
+    "user_id": 25,
+    "route": "POST /api/v1/lost-items",
+    "status": 201,
+    "duration_ms": 58,
+    "db_ms": 41,
+    "queries": 4,
+    "matches_generated": 3 }
+
+Every line carries the request id. A user reporting a problem quotes the id
+shown on the error screen, and the entire request is retrievable from one grep.
+
+Redaction is applied at the logger by field name: password, password_hash,
+token, authorization, proof_text, private_feature. Redacting at the logger
+rather than at each call site means a new endpoint cannot leak by omission.
+
+------------------------------------------------------------------------------
+19.2 Slow Query Logging
+------------------------------------------------------------------------------
+
+  ALTER DATABASE foundit SET log_min_duration_statement = 200;
+
+Any statement exceeding 200 milliseconds is logged with its text and parameters.
+This threshold equals the NFR-1.1 budget deliberately: the log becomes a record
+of every budget violation, and an empty log is evidence the budget is being met.
+
+------------------------------------------------------------------------------
+19.3 Metrics Worth Watching
+------------------------------------------------------------------------------
+
+  Requests per route with p50 and p95 latency
+  Database time as a fraction of request time
+  Connection pool: in use, idle, waiting
+  Matches generated per report, distribution
+  Match row count as a multiple of lost item count  ← the RK-4 tripwire
+  Claim approval conflict rate (409s as a fraction of approval attempts)
+  Rows in audit_log, growth per day
+
+The fifth is the one nobody thinks to watch and the one that predicts the
+failure that would actually happen. The design assumes the matches relation grows
+linearly. If that assumption breaks, this metric shows it weeks before the
+database notices.
+
+================================================================================
+20. TECHNOLOGY DECISION RECORD
+================================================================================
+
+  ADR-1  Synchronous match generation inside the creation transaction
+         Rejected: async queue. Reason: the confirmation screen must state the
+         outcome, and the standing-query model is communicated at exactly that
+         moment. Cost: transaction duration. Revisit if p95 exceeds 150 ms.
+
+  ADR-2  Hand-written SQL, no ORM
+         Rejected: an ORM. Reason: the matching query is not expressible
+         idiomatically in any ORM and would be raw SQL regardless; and the
+         project's purpose is to demonstrate SQL. Cost: more code.
+
+  ADR-3  Business logic in stored procedures for the two critical operations
+         Rejected: logic entirely in the service layer. Reason: transaction
+         boundary and SQL become one artefact, and the operations are
+         demonstrable in psql without the application running.
+         Cost: logic in two languages; mitigated by keeping only these two
+         operations in the database.
+
+  ADR-4  Separate lost_items and found_items relations
+         Rejected: one relation with a type discriminator. Reason: different
+         mandatory attributes, different status domains, and foreign key
+         clarity in matches. Cost: duplicated column definitions.
+
+  ADR-5  Polymorphic audit_log
+         Rejected: four typed audit tables; four nullable foreign keys.
+         Reason: one table, one query shape, write-heavy and read-rarely.
+         Cost: no referential integrity on entity_id; accepted and documented.
+
+  ADR-6  READ COMMITTED with explicit row locking
+         Rejected: SERIALIZABLE. Reason: explicit locking gives a specific,
+         translatable error instead of a generic serialisation failure, and
+         needs no retry loop. Cost: correctness depends on a lock that a
+         refactor could remove; mitigated by the partial unique index backstop.
+
+  ADR-7  count(*) OVER () for pagination totals
+         Rejected: a second COUNT query. Reason: one query, one WHERE clause,
+         no drift. Cost: forfeits LIMIT early termination. Revisit above
+         100,000 rows.
+
+  ADR-8  No cache over mutable data
+         Rejected: Redis. Reason: indexes are fast enough at projected volume
+         and invalidation complexity teaches nothing relevant. Cost: none at
+         this scale.
+
+================================================================================
+END OF DOCUMENT — FI-TFL-001 v1.0
+================================================================================

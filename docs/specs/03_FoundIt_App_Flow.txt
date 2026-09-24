@@ -1,0 +1,1482 @@
+================================================================================
+FOUNDIT — SMART CAMPUS LOST & FOUND
+APPLICATION FLOW DOCUMENT
+================================================================================
+
+Document ID .............. FI-AFL-001
+Version .................. 1.1
+Status ................... Baselined
+Date ..................... 18 September 2026
+Author ................... Aadit Garg (25BCE2315)
+Depends On ............... FI-PRD-001 v1.0, FI-TRD-001 v1.0
+
+================================================================================
+TABLE OF CONTENTS
+================================================================================
+
+1.  Purpose and Reading Guide
+2.  Navigation Model and Screen Inventory
+3.  Entry Points and First-Run Experience
+4.  Flow A — Registration and Authentication
+5.  Flow B — Reporting a Lost Item
+6.  Flow C — Reporting a Found Item
+7.  Flow D — Browsing and Searching
+8.  Flow E — Reviewing Matches
+9.  Flow F — Claiming an Item
+10. Flow G — Verifying a Claim
+11. Flow H — Handover and Completion
+12. Flow I — Viewing Item History
+13. Flow J — Staff Console
+14. Flow K — Administrative Analytics
+15. State Diagrams
+16. Error, Empty and Edge-Case Flows
+17. Cross-Cutting Behaviours
+18. End-to-End Scenario Walkthroughs
+19. Flow-to-Requirement Traceability
+
+================================================================================
+1. PURPOSE AND READING GUIDE
+================================================================================
+
+------------------------------------------------------------------------------
+1.1 What This Document Is
+------------------------------------------------------------------------------
+
+This document describes how a person moves through FoundIt: which screen they
+land on, what they see, what they can do, what the system does in response, and
+where they end up. It is the behavioural specification that sits between the
+product requirements, which say what must be possible, and the design
+specification, which says what it looks like.
+
+Every flow is described at three levels simultaneously. The user level says what
+the person perceives and decides. The system level says what the application
+does behind that perception. The data level says which relations are read and
+written and inside what transaction boundary. Keeping all three visible in one
+document is the point: a flow that reads well but writes badly is not a good
+flow, and a flow that writes correctly but leaves the user confused about
+whether anything happened is not a good flow either.
+
+------------------------------------------------------------------------------
+1.2 Notation
+------------------------------------------------------------------------------
+
+  [SCREEN]        A distinct route with its own URL
+  (modal)         An overlay that does not change the route
+  → action        A user-initiated transition
+  ⇒ system        An automatic transition following system work
+  ◆ decision      A branch point
+  ▸ DB            A database operation, annotated with its transaction
+  ✱ guard         A precondition that must hold or the transition is blocked
+
+------------------------------------------------------------------------------
+1.3 The Two Journeys That Matter
+------------------------------------------------------------------------------
+
+Everything in this document serves one of two journeys, and when a design
+decision is contested, it is resolved by asking which journey it serves better.
+
+The owner journey: I lost something → I report it → the system finds a candidate
+→ I prove it is mine → I get it back.
+
+The finder journey: I found something → I report it → somebody claims it → I
+check them → I hand it over.
+
+Every other flow — browse, search, history, analytics, staff intake — is
+supporting apparatus. If the two core journeys are slow or confusing, no amount
+of polish elsewhere rescues the product.
+
+================================================================================
+2. NAVIGATION MODEL AND SCREEN INVENTORY
+================================================================================
+
+------------------------------------------------------------------------------
+2.1 Structure
+------------------------------------------------------------------------------
+
+FoundIt is a shallow application. The deepest path from the landing screen to
+any action is three levels, and most actions are reachable in two. Shallowness
+is chosen deliberately: a person who has just lost something is not in a mood to
+navigate.
+
+  Level 0   Landing / Dashboard
+  Level 1   Report Lost | Report Found | Browse | My Reports | My Claims
+  Level 2   Match list | Item detail | Claim detail | Verification queue
+  Level 3   Timeline | Claim submission modal
+
+Persistent navigation is a top bar on desktop and a bottom bar on mobile,
+carrying five destinations: Home, Browse, Report (a compound action button), My
+Items, and Profile. The Report control is visually dominant because reporting is
+the action the product most wants to encourage.
+
+------------------------------------------------------------------------------
+2.2 Screen Inventory
+------------------------------------------------------------------------------
+
+  ID    Route                          Screen                       Auth
+  ----  -----------------------------  ---------------------------  --------
+  S01   /                              Landing (unauthenticated)    none
+  S02   /register                      Registration                 none
+  S03   /login                         Sign in                      none
+  S04   /home                          Dashboard                    user
+  S05   /report                        Report type chooser          user
+  S06   /report/lost                   Lost report form             user
+  S07   /report/found                  Found report form            user
+  S08   /report/success/:type/:id      Submission confirmation      owner
+  S09   /browse                        Found items browse           user
+  S10   /browse/:foundId               Found item public detail     user
+  S11   /my/reports                    My lost and found reports    user
+  S12   /my/reports/lost/:id           Lost report detail           owner
+  S13   /my/reports/lost/:id/matches   Match list for a report      owner
+  S14   /matches/:matchId              Match detail with reasons    owner
+  S15   /claims/new/:matchId           Claim submission             owner
+  S16   /my/claims                     Claims I have filed          user
+  S17   /my/claims/:id                 Claim detail and status      party
+  S18   /verify                        Claims awaiting my decision  user
+  S19   /verify/:claimId               Verification screen          verifier
+  S20   /handover/:claimId             Handover coordination        party
+  S21   /timeline/:type/:id            Audit timeline               party
+  S22   /staff                         Staff console                staff
+  S23   /staff/intake                  Rapid intake form            staff
+  S24   /staff/ageing                  Items held too long          staff
+  S25   /admin                         Admin dashboard              admin
+  S26   /admin/reference/:type         Reference data management    admin
+  S27   /admin/analytics               Analytics                    admin
+  S28   /profile                       Own profile and settings     user
+  S29   /404                           Not found                    any
+  S30   /error                         Unrecoverable error          any
+
+================================================================================
+3. ENTRY POINTS AND FIRST-RUN EXPERIENCE
+================================================================================
+
+------------------------------------------------------------------------------
+3.1 Entry Points
+------------------------------------------------------------------------------
+
+Cold entry. The person types the URL or follows a link from a poster or a
+messaging group. They arrive at S01 unauthenticated.
+
+Returning entry. A valid session token exists. The router bypasses S01 entirely
+and lands on S04. There is no reason to show a marketing page to somebody who
+already has an account, and doing so is a small but real friction tax on the
+users who matter most.
+
+Deep entry. A link to a specific found item, shared by someone who thinks they
+recognise it. The route is S10. If unauthenticated, the person is sent to S03
+with a return path parameter, and after signing in is delivered to S10 rather
+than to the dashboard. Losing the destination on sign-in is one of the most
+common and most annoying defects in web applications, and it is avoided by
+carrying the return path through the authentication flow explicitly.
+
+------------------------------------------------------------------------------
+3.2 S01 — Landing
+------------------------------------------------------------------------------
+
+The landing screen does three jobs and no others: it says what the product is in
+one line, it shows the two primary actions, and it demonstrates that the system
+is alive.
+
+  Content:
+    - Product name and one-line description
+    - Two large actions: "I lost something" and "I found something"
+    - A live counter: items currently listed, items returned this month
+    - A strip of the six most recent found items, redacted to category,
+      colour swatch, building and date
+    - Secondary link to sign in
+
+The live counter and the recent strip exist to address risk RK-1 from the PRD.
+A landing page that says "report your lost item" against an empty void gives no
+reason to believe the system works. A landing page that says "148 items
+currently listed, 37 returned this month" and shows six of them does.
+
+  → "I lost something"   ⇒ if authenticated, S06; else S03 with return=/report/lost
+  → "I found something"  ⇒ if authenticated, S07; else S03 with return=/report/found
+  → "Sign in"            ⇒ S03
+
+Note that the person states their intent before authenticating. This ordering
+matters: intent-first flows convert better than authentication-first flows,
+because the person has already invested a decision by the time they are asked to
+create an account.
+
+------------------------------------------------------------------------------
+3.3 S04 — Dashboard, First Visit
+------------------------------------------------------------------------------
+
+A newly registered user's dashboard has nothing in it. The empty state carries
+the entire weight of explaining the product, so it is written carefully:
+
+  "You have no reports yet.
+   If you have lost something, report it and we will check every item that
+   gets found from now on against your description.
+   If you have found something, report it and we will look for the owner."
+
+  → Report lost   ⇒ S06
+  → Report found  ⇒ S07
+  → Browse        ⇒ S09
+
+The phrase "from now on" is doing specific work. It sets the expectation that a
+report is a standing query rather than a one-time search, which is the mental
+model the product needs the user to hold. Without it, a user who reports a loss
+and sees no matches concludes the system has failed.
+
+================================================================================
+4. FLOW A — REGISTRATION AND AUTHENTICATION
+================================================================================
+
+------------------------------------------------------------------------------
+4.1 Registration — S02
+------------------------------------------------------------------------------
+
+  Fields:  Full name          required
+           Email              required, institutional domain
+           Password           required, minimum 8 characters
+           Confirm password   required, must match
+           Phone              optional
+           Department         optional, select from list
+
+  → Submit
+      ✱ client validation: all required present, passwords match, email shape
+      ▸ DB  BEGIN
+              INSERT INTO users (...) VALUES (...)
+              INSERT INTO audit_log ('USER', new id, 'CREATED', ...)
+            COMMIT
+      ◆ 23505 unique_violation on uq_users_email
+          ⇒ stay on S02, field-level error on email:
+            "An account already exists with this email. Sign in instead?"
+            with a link that carries the email through to S03
+      ◆ domain not permitted
+          ⇒ field-level error naming the accepted domain
+      ◆ success
+          ⇒ issue token, redirect to return path or S04
+
+The duplicate-email path deserves comment because it is where a careless
+implementation leaks information or wastes the user's time. FoundIt tells the
+user the account exists, which is an acceptable disclosure in a closed community
+where email addresses are already institutional and enumerable, and offers the
+sign-in link pre-filled. A public product would handle this differently; this
+one does not need to.
+
+------------------------------------------------------------------------------
+4.2 Sign In — S03
+------------------------------------------------------------------------------
+
+  Fields:  Email, Password
+  → Submit
+      ▸ DB  SELECT user_id, password_hash, role, is_active
+              FROM users WHERE lower(email) = lower($1)
+      ◆ no row, or bcrypt comparison fails
+          ⇒ single generic error: "Email or password is incorrect."
+            The same message for both cases, and the same response time,
+            achieved by running a dummy bcrypt comparison when no row is found.
+            Distinguishing the two would confirm which emails are registered.
+      ◆ is_active false
+          ⇒ "This account is not active. Contact the help desk."
+      ◆ success
+          ⇒ issue token, redirect to return path or S04
+      ◆ sixth failed attempt within 15 minutes
+          ⇒ 429, "Too many attempts. Try again in a few minutes."
+
+------------------------------------------------------------------------------
+4.3 Session Behaviour
+------------------------------------------------------------------------------
+
+The access token lives one hour. A silent refresh happens on any API call made
+within the last ten minutes of validity, so an active user is never interrupted.
+A user returning after the refresh window is sent to S03 with the current route
+as the return path, so they resume exactly where they were.
+
+Sign-out revokes the refresh token server-side and clears client storage.
+
+================================================================================
+5. FLOW B — REPORTING A LOST ITEM
+================================================================================
+
+This is the highest-traffic flow and the one with the tightest time budget: the
+PRD requires completion in under ninety seconds by a first-time user.
+
+------------------------------------------------------------------------------
+5.1 S06 — The Form
+------------------------------------------------------------------------------
+
+The form is presented as a single scrolling page rather than a multi-step
+wizard. Wizards feel more guided but cost a page transition per step and hide
+the total length, which raises abandonment. Six fields on one screen is not
+enough length to justify chunking.
+
+  Field order and rationale:
+
+  1. What did you lose?        Text, required
+                               First because it is the thing the person is
+                               already thinking about. Autocomplete suggests
+                               common item names from previous reports.
+
+  2. Category                  Select, required
+                               Pre-selected by a keyword lookup against the
+                               item name: typing "airpods" selects Electronics
+                               automatically, and the user may override.
+
+  3. Where?                    Searchable select, required
+                               Grouped by building. A type-ahead filters the
+                               eighty-odd locations to a handful in two
+                               keystrokes.
+
+  4. When?                     Date, required, defaults to today
+                               A future date is blocked in the picker, so the
+                               CHECK constraint is a backstop rather than the
+                               primary experience.
+
+  5. Colour                    Swatch selector, optional
+                               Rendered as colour chips rather than a dropdown,
+                               because recognition is faster than reading.
+
+  6. Brand                     Select with free-text escape, optional
+
+  7. Anything distinctive?     Textarea, optional, 300 characters
+                               Placeholder: "A scratch, a sticker, what was
+                               inside, a name written on it..."
+
+  → Submit
+      ✱ guard: required fields present; lost_date <= today
+      ▸ DB  BEGIN
+              INSERT INTO lost_items (...) RETURNING lost_id
+              SELECT generate_matches_for_lost(lost_id)
+              INSERT INTO audit_log ('LOST_ITEM', lost_id, 'CREATED',
+                                     NULL, 'OPEN', user_id, NULL)
+            COMMIT
+      ⇒ S08 with the match count and top match carried in the response
+
+------------------------------------------------------------------------------
+5.2 Why Matching Runs Inside the Creation Transaction
+------------------------------------------------------------------------------
+
+Three alternatives were considered.
+
+Asynchronous, after commit. The report is created, a job is queued, matches
+appear a few seconds later. This is the scalable choice and the wrong one here.
+It means the confirmation screen cannot say anything about matches, so the user
+must either wait on a spinner or be sent to a screen that says "we will check
+and let you know", which is exactly the vague non-answer the product exists to
+replace.
+
+Synchronous but outside the transaction. The report commits, then matching runs
+and commits separately. A failure between the two leaves a report with no
+matches and no record that matching was attempted, and the user sees an empty
+list with no explanation.
+
+Synchronous inside the transaction. The report and its matches commit together
+or not at all. The confirmation screen can state the outcome immediately. The
+cost is transaction duration, budgeted at 200 milliseconds in NFR-1.1 and
+measured.
+
+The third is chosen. The reasoning is worth articulating because it is a case
+where the textbook answer, asynchronous processing, is the wrong answer for the
+product, and understanding why is more valuable than reciting the pattern.
+
+------------------------------------------------------------------------------
+5.3 S08 — Confirmation, Three Variants
+------------------------------------------------------------------------------
+
+The confirmation screen branches on what matching found, and the three variants
+are written to produce three different, appropriate emotional responses.
+
+  ◆ At least one STRONG match
+      "Good news. We may have already found it."
+      The top match is rendered as a full card with its score and reasons.
+      Primary action: "See the match"  ⇒ S14
+      Secondary: "See all N matches"   ⇒ S13
+
+  ◆ Only POSSIBLE or WEAK matches
+      "Your report is live. We found N items that might be yours."
+      Rendered as a compact list, ranked.
+      Primary action: "Review them"    ⇒ S13
+      Secondary: "Browse everything"   ⇒ S09
+
+  ◆ No matches above the floor
+      "Your report is live.
+       Nothing matching has been found yet. From now on, every item anyone
+       reports finding will be checked against your description automatically.
+       We will tell you the moment something matches."
+      Primary action: "Browse found items"  ⇒ S09
+      Secondary: "Back to my reports"       ⇒ S11
+
+The third variant is the one that determines whether the product retains users,
+and it is the one most likely to be written carelessly. "No matches found" is a
+failure message. The version above is a status message that explains the
+standing-query model and directs the user to the one thing they can usefully do
+next.
+
+------------------------------------------------------------------------------
+5.4 Editing and Withdrawing
+------------------------------------------------------------------------------
+
+From S12, a report in status OPEN offers Edit and Withdraw.
+
+  → Edit
+      ✱ guard: status = 'OPEN' and viewer is the owner
+      ⇒ S06 pre-populated
+      → Save
+          ▸ DB  BEGIN
+                  UPDATE lost_items SET ... WHERE lost_id = $1 AND user_id = $2
+                  SELECT generate_matches_for_lost($1)   -- re-score
+                  INSERT INTO audit_log (..., 'UPDATED', ...)
+                COMMIT
+          Note: re-running the match procedure is essential. A user who corrects
+          the location from the wrong building to the right one has materially
+          changed the match landscape, and stale scores would be worse than no
+          scores.
+
+  → Withdraw
+      (modal) "Withdraw this report? It will stop matching against new finds.
+               You can file a new report later."
+      → Confirm
+          ▸ DB  BEGIN
+                  UPDATE lost_items SET status='CLOSED_BY_USER' WHERE ...
+                  UPDATE matches SET status='INVALIDATED'
+                    WHERE lost_id=$1 AND status='SUGGESTED'
+                  INSERT INTO audit_log (..., 'STATUS_CHANGED', 'OPEN',
+                                         'CLOSED_BY_USER', ...)
+                COMMIT
+          ⇒ S11
+
+Matches are invalidated rather than deleted, preserving the record that a
+suggestion was made. This is consistent with the general principle that the
+system forgets nothing.
+
+================================================================================
+6. FLOW C — REPORTING A FOUND ITEM
+================================================================================
+
+The found flow is deliberately shorter than the lost flow, because finder
+motivation is weaker and decays with friction. Every field on this form has
+earned its place.
+
+------------------------------------------------------------------------------
+6.1 S07 — The Form
+------------------------------------------------------------------------------
+
+  1. What did you find?        Text, required
+  2. Category                  Select, required, keyword pre-selection
+  3. Where did you find it?    Searchable select, required
+  4. When?                     Date, required, defaults to today
+  5. Colour                    Swatch, optional
+  6. Brand                     Select, optional
+  7. Public description        Textarea, optional
+                               Labelled "What will help the owner recognise
+                               it?" with a note: "This is shown publicly."
+  8. Private detail            Textarea, REQUIRED
+                               Labelled "What detail would only the owner
+                               know?" with a note: "This is never shown to
+                               anyone. We use it to check that a claimant
+                               really owns the item."
+  9. Where is it now?          Radio, required
+  10. Is this valuable?        Checkbox, optional, default unchecked
+                               "This looks valuable — please have
+                                staff handle the verification."
+                               ( ) I still have it
+                               ( ) I left it at the Security Desk
+                               ( ) I left it at a department office
+                               ( ) I left it at a hostel office
+                               Selecting anything other than the first reveals
+                               a storage-location text field, required.
+
+------------------------------------------------------------------------------
+6.2 The Two Description Fields
+------------------------------------------------------------------------------
+
+Splitting description into public and private is the single most important
+interaction decision in the product, and it is also the one most likely to
+confuse a user who is not paying attention. The interface therefore makes the
+distinction unmissable: the two fields are visually separated, differently
+coloured, and each carries an explicit visibility note. The private field is
+marked with a lock icon and the words "Never shown publicly" directly beneath
+the input, not in a tooltip.
+
+The private field is required at the database level (found_items.private_feature
+NOT NULL) because a found report without it cannot support verification. The
+form communicates this as "Required — this is how we protect the item" rather
+than as a bare asterisk, because a user who understands why a field is required
+supplies a better answer.
+
+Validation rejects a private detail that duplicates the public description
+verbatim, with the message: "This is the same as your public description. Please
+add something only the owner would know."
+
+------------------------------------------------------------------------------
+6.3 Submission
+------------------------------------------------------------------------------
+
+  → Submit
+      ✱ guard: required fields; found_date <= today; storage location present
+               when custody is not WITH_FINDER; private detail differs from
+               public description
+      ▸ DB  BEGIN
+              INSERT INTO found_items (...) RETURNING found_id
+              SELECT generate_matches_for_found(found_id)
+              INSERT INTO audit_log ('FOUND_ITEM', found_id, 'CREATED',
+                                     NULL, 'AVAILABLE', user_id, NULL)
+            COMMIT
+      ⇒ S08
+
+------------------------------------------------------------------------------
+6.4 S08 for a Found Report
+------------------------------------------------------------------------------
+
+The confirmation differs from the lost variant in a crucial way: it must tell
+the finder what to do with the physical object.
+
+  ◆ Category is sensitive (identity documents) or high value
+      "Thank you. Please hand this in at the Security Desk, Main Gate.
+       Identity documents and valuables are held there so the owner can
+       collect them safely. Your report will still find the owner."
+      The instruction is prominent and is repeated in the report detail view
+      until custody is updated.
+
+  ◆ Ordinary category, finder retains custody
+      "Thank you. Keep the item safe. If someone claims it, we will ask you
+       one question to check they are the owner, and only then will we share
+       contact details."
+
+  ◆ Ordinary category, deposited
+      "Thank you. We have recorded that it is at <storage location>."
+
+  ◆ Matching found candidates
+      "We have also found N people who reported losing something similar.
+       They will see your report now."
+      Deliberately, the finder is NOT shown the lost reporters' details and is
+      not asked to act. The next move belongs to the owner.
+
+================================================================================
+7. FLOW D — BROWSING AND SEARCHING
+================================================================================
+
+------------------------------------------------------------------------------
+7.1 S09 — Browse
+------------------------------------------------------------------------------
+
+  ▸ DB  SELECT ... FROM v_public_found_items
+         WHERE (filters)
+         ORDER BY found_date DESC
+         LIMIT 24 OFFSET $n
+
+  Layout: a responsive card grid, three columns on desktop, one on mobile.
+  Each card:  colour swatch | item name | category | building | date
+              | "N days here"
+
+  Filter rail (desktop) / filter sheet (mobile):
+    Category      multi-select
+    Building      multi-select
+    Colour        swatch multi-select
+    Date range    last 7 / 30 / 90 days / custom
+    Search        keyword, debounced 300 ms
+
+  → Apply filter
+      Filters are written to the URL query string, so a filtered view is
+      shareable and survives a refresh. This is a small thing that users
+      notice only by its absence.
+
+  → Keyword search
+      ▸ DB  the full-text query Q9, ranked by ts_rank
+
+  → Card click  ⇒ S10
+
+------------------------------------------------------------------------------
+7.2 Pagination
+------------------------------------------------------------------------------
+
+Server-side, page size 24. The first page is loaded on route entry; subsequent
+pages load on an explicit "Load more" action rather than on infinite scroll.
+Infinite scroll was rejected because it makes the footer unreachable and because
+it hides the total count, and the total count ("148 items") is one of the
+reassurance signals the product depends on.
+
+------------------------------------------------------------------------------
+7.3 S10 — Found Item Detail
+------------------------------------------------------------------------------
+
+  Shows: item name, category, colour swatch, brand, public description,
+         building (and specific location if the category is not sensitive),
+         date found, days in system, custody status in general terms
+         ("held at the Security Desk" or "with the finder").
+
+  Does NOT show: the private detail, the finder's name, the finder's contact
+         details, the exact storage location.
+
+  ◆ The viewer has an OPEN lost report that matches this item
+      A banner appears: "This may match your report: <item name>."
+      → "Claim this item"  ⇒ S15 for the relevant match
+
+  ◆ The viewer has no matching report
+      → "This is mine"
+        ⇒ (modal) "To claim an item you need a lost report on file, so we
+                   can check the details. File one now — it takes a minute."
+        → "File a report"  ⇒ S06, pre-filled with this item's category,
+                              location and colour
+
+The requirement that a claim be routed through a match, rather than made
+directly against a found item, is a structural protection. It forces the
+claimant to commit to a description of the item before they can claim it, and
+the description they commit to is recorded. A claimant who describes the item
+differently from the listing they are looking at has made a verifiable mistake.
+
+================================================================================
+8. FLOW E — REVIEWING MATCHES
+================================================================================
+
+------------------------------------------------------------------------------
+8.1 S13 — Match List for One Report
+------------------------------------------------------------------------------
+
+  ▸ DB  SELECT ... FROM v_match_detail
+         WHERE lost_id = $1 AND owner_id = $2 AND status = 'SUGGESTED'
+         ORDER BY match_score DESC
+
+  Grouping:
+    STRONG MATCHES        rendered as full cards, expanded
+    POSSIBLE MATCHES      rendered as compact cards
+    ▸ Show N weaker matches   collapsed by default, expands on click
+
+  Each card shows: the found item's public summary, the score as a numeric
+  badge with a band label, and the top three reasons inline with a "see all
+  reasons" affordance.
+
+  → Card click     ⇒ S14
+  → Dismiss (×)    (modal) "Not your item? We will stop showing it."
+                   ▸ DB  UPDATE matches SET status='REJECTED_BY_USER'
+                          WHERE match_id=$1
+                        INSERT INTO audit_log ('MATCH', $1, 'STATUS_CHANGED',
+                                               'SUGGESTED','REJECTED_BY_USER',
+                                               user_id, NULL)
+                   The card animates out. An undo affordance persists for ten
+                   seconds, because dismissal is easy to do accidentally and
+                   irreversible dismissal of a correct match is the worst
+                   outcome the flow can produce.
+
+------------------------------------------------------------------------------
+8.2 S14 — Match Detail
+------------------------------------------------------------------------------
+
+This screen is where the product's central claim — that the database found this
+and can explain why — is either made convincing or not.
+
+  Layout: two panels side by side on desktop, stacked on mobile.
+
+    LEFT: YOUR REPORT                RIGHT: THE FOUND ITEM
+    AirPods Pro                      AirPods
+    Electronics                      Electronics
+    Apple                            Apple
+    White                            White
+    Central Library                  Central Library
+    10 September                     11 September
+    "Black case, small scratch"      "White earphones in a black case"
+
+  Attributes that agree are visually linked across the two panels. Attributes
+  that differ are shown without emphasis rather than being marked in red,
+  because a difference is not an error.
+
+  Beneath, the score breakdown:
+
+    Same category (Electronics)                            +20
+    Same brand (Apple)                                     +20
+    Same location (Central Library)                        +20
+    Same colour (White)                                    +15
+    Found 1 day after you lost it                          +13
+    Shared keywords: black, case                           +10
+    ─────────────────────────────────────────────────────────
+    Match score                                             98   STRONG
+
+  The reasons are rendered from matches.reason_json exactly as stored. The
+  client performs no arithmetic; it displays the stored total. This guarantees
+  that what the user sees is what the engine computed.
+
+  Actions:
+    → "This is mine — claim it"   ⇒ S15
+    → "Not mine"                  ⇒ dismiss, back to S13
+    → "See the item's history"    ⇒ S21
+
+================================================================================
+9. FLOW F — CLAIMING AN ITEM
+================================================================================
+
+------------------------------------------------------------------------------
+9.1 S15 — Claim Submission
+------------------------------------------------------------------------------
+
+  ✱ guards, checked server-side before the form is even served:
+      - the viewer owns the lost item in the match
+      - the found item is still AVAILABLE
+      - the viewer is not the finder (BR-1, enforced by trg_no_self_claim)
+      - the viewer has fewer than MAX_PENDING_CLAIMS pending claims
+      - the viewer has not already been rejected three times on this item
+
+  Screen content:
+
+    "Prove it is yours
+
+     The person who found this item told us one detail about it that is not
+     shown anywhere on this page. Describe something distinctive about your
+     item — a mark, a sticker, an engraving, what was inside it, or anything
+     else only the owner would know.
+
+     [                                                          ]
+     [                                                          ]
+     minimum 10 characters
+
+     The finder will compare your answer with what they told us.
+     They will not see your contact details unless they confirm the match."
+
+  → Submit
+      ▸ DB  BEGIN
+              -- pending claim count check
+              SELECT count(*) FROM claims
+                WHERE claimant_id=$1 AND status='PENDING';
+              INSERT INTO claims (match_id, claimant_id, proof_text, status)
+                VALUES ($2, $1, $3, 'PENDING')
+                -- trg_claims_denormalise_found sets found_id
+                -- trg_no_self_claim guards BR-1
+              UPDATE matches SET status='CLAIMED' WHERE match_id=$2;
+              INSERT INTO audit_log ('CLAIM', new id, 'CLAIM_CREATED',
+                                     NULL, 'PENDING', $1, NULL);
+            COMMIT
+      ⇒ S17
+
+------------------------------------------------------------------------------
+9.2 Why the Claimant Never Sees the Private Detail
+------------------------------------------------------------------------------
+
+The obvious alternative design shows the claimant the finder's private detail
+and asks "is this your item?". It is obviously wrong, and it is worth saying why
+explicitly, because it is the kind of thing that gets built by accident when a
+developer is wiring up a screen and the data is already in the response object.
+
+If the claimant sees the detail, the challenge is not a challenge. Anyone can
+say yes. The entire verification mechanism reduces to a confirmation dialog.
+
+This is why the privacy boundary is enforced in the view (v_public_found_items
+does not contain private_feature) and in the API layer (the claim creation
+endpoint's response shape contains no field for it), rather than by remembering
+not to render it. A defence that depends on remembering will eventually fail.
+
+------------------------------------------------------------------------------
+9.3 S17 — Claim Status
+------------------------------------------------------------------------------
+
+  ◆ status PENDING
+      "Waiting for the finder to check your answer.
+       We will tell you as soon as they decide."
+      A timeline shows: claim filed → awaiting verification.
+      → Withdraw claim
+
+  ◆ status APPROVED
+      "Confirmed. This item is yours."
+      The counterparty's name and contact details appear here, and only here,
+      and only now.
+      Custody instruction repeated: "Collect it from the Security Desk, Main
+      Gate" or "Contact <name> to arrange collection."
+      → "I have collected it"  ⇒ S20
+
+  ◆ status REJECTED
+      "The finder could not confirm this is your item."
+      The rejection reason is shown only if the verifier supplied one and only
+      if it does not disclose the private detail; the interface offers the
+      verifier a set of neutral canned reasons for exactly this purpose.
+      No indication of how close the answer was.
+      → "Browse other items"  ⇒ S09
+
+================================================================================
+10. FLOW G — VERIFYING A CLAIM
+================================================================================
+
+------------------------------------------------------------------------------
+10.1 S18 — Verification Queue
+------------------------------------------------------------------------------
+
+  ▸ DB  SELECT c.claim_id, c.claimed_at, f.item_name, u.full_name
+          FROM claims c
+          JOIN found_items f ON f.found_id = c.found_id
+          JOIN users u ON u.user_id = c.claimant_id
+         WHERE c.status = 'PENDING'
+           AND ( f.user_id = $1
+                 OR ( $2 = 'STAFF' AND EXISTS (
+                         SELECT 1 FROM categories cat
+                         WHERE cat.category_id = f.category_id
+                           AND (cat.requires_staff OR f.is_high_value))))
+         ORDER BY c.claimed_at
+
+  The queue shows one row per pending claim with the item, the claimant's
+  display name, and how long the claim has been waiting. Claims older than
+  seven days are marked.
+
+  → Row click  ⇒ S19
+
+------------------------------------------------------------------------------
+10.2 S19 — The Verification Screen
+------------------------------------------------------------------------------
+
+This screen is reduced to the smallest thing that supports a correct decision.
+The verifier is a student doing a favour, often on a phone, often distracted.
+
+  "Is this their item?
+
+   You said:
+   ┌────────────────────────────────────────────────┐
+   │ There is a small scratch on the back of the    │
+   │ charging case, near the hinge.                 │
+   └────────────────────────────────────────────────┘
+
+   They said:
+   ┌────────────────────────────────────────────────┐
+   │ The case has a scratch near the hinge on the   │
+   │ back, and there's a small blue sticker inside. │
+   └────────────────────────────────────────────────┘
+
+   [ Yes, it is theirs ]      [ No, it is not ]
+
+   If you are not sure, you can ask the Security Desk to decide instead."
+
+  → "Yes, it is theirs"
+      (modal) "Confirm? We will share your contact details with them and mark
+               this item as claimed. This cannot be undone without staff help."
+      → Confirm
+          ▸ DB  the approve_claim() transaction of TRD section 10.2
+          ◆ 409 ITEM_NOT_AVAILABLE
+              ⇒ "Someone else's claim on this item was approved a moment ago.
+                 Nothing has changed here."
+                This is the visible face of the concurrency control, and the
+                message is written to be comprehensible to a student rather
+                than to a database administrator.
+          ◆ success
+              ⇒ S20
+
+  → "No, it is not"
+      (modal) Requires selecting a reason from a fixed list:
+              ( ) The detail they gave does not match
+              ( ) They gave no useful detail
+              ( ) I think this is a different item
+              ( ) Other (free text, 300 characters)
+      → Confirm
+          ▸ DB  BEGIN
+                  UPDATE claims SET status='REJECTED', verifier_id=$1,
+                         decided_at=NOW(), decision_note=$2
+                    WHERE claim_id=$3 AND status='PENDING';
+                  UPDATE matches SET status='SUGGESTED'
+                    WHERE match_id=(SELECT match_id FROM claims
+                                     WHERE claim_id=$3);
+                  UPDATE users SET flagged_count = flagged_count + 1
+                    WHERE user_id=(SELECT claimant_id FROM claims
+                                    WHERE claim_id=$3);
+                  INSERT INTO audit_log ('CLAIM', $3, 'CLAIM_REJECTED',
+                                         'PENDING','REJECTED', $1, $2);
+                COMMIT
+          ⇒ S18
+
+  → "Ask the Security Desk to decide"
+      ▸ DB  UPDATE claims SET verifier_id = NULL, decision_note='ESCALATED'
+            -- routes the claim into the staff queue
+      ⇒ S18
+
+The escalation path exists because a verifier forced to choose between two
+uncomfortable options will pick one arbitrarily, and an arbitrary approval is
+worse than a slow correct one. Giving them a third option costs one row update
+and materially improves decision quality.
+
+================================================================================
+11. FLOW H — HANDOVER AND COMPLETION
+================================================================================
+
+------------------------------------------------------------------------------
+11.1 S20 — Handover
+------------------------------------------------------------------------------
+
+The system cannot move a physical object. Its job here is to make the handover
+easy to arrange and to record that it happened.
+
+  ◆ custody = DEPOSITED_SECURITY
+      "Collect it from the Security Desk, Main Gate.
+       Take your student ID. Reference: FI-204."
+      The reference code is the found item id formatted for a human, which
+      lets the desk staff locate the record without spelling out a description.
+
+  ◆ custody = WITH_FINDER
+      Contact details for both parties, and a suggested message the claimant
+      can copy:
+      "Hi, I am collecting the AirPods you found in the Library on 11 Sept.
+       When would suit you?"
+      Providing the draft message removes a small social friction that
+      measurably delays handovers.
+
+  → "I have collected it" (claimant) or "I have handed it over" (finder)
+      ▸ DB  BEGIN
+              UPDATE claims SET status='COMPLETED', completed_at=NOW()
+                WHERE claim_id=$1 AND status='APPROVED';
+              UPDATE found_items SET status='RETURNED', returned_at=NOW()
+                WHERE found_id=$2;
+              UPDATE lost_items SET status='RESOLVED', resolved_at=NOW()
+                WHERE lost_id=$3;
+              INSERT INTO audit_log (three rows: claim, found, lost);
+            COMMIT
+      ⇒ S04 with a success banner: "Returned. That is one more."
+      The counter on the landing page increments.
+
+Either party can complete. Requiring both would deadlock whenever one of them
+forgets, which is most of the time. A single-party completion is occasionally
+premature, and the cost of that is low; the audit trail records who confirmed
+it.
+
+------------------------------------------------------------------------------
+11.2 Reversal
+------------------------------------------------------------------------------
+
+Staff only. Available from S22 for any claim in status APPROVED or COMPLETED.
+
+  ▸ DB  BEGIN
+          UPDATE claims SET status='REVERSED' WHERE claim_id=$1;
+          UPDATE found_items SET status='AVAILABLE', returned_at=NULL
+            WHERE found_id=$2;
+          UPDATE lost_items SET status='OPEN', resolved_at=NULL
+            WHERE lost_id=$3;
+          UPDATE matches SET status='SUGGESTED' WHERE found_id=$2
+            AND status='INVALIDATED';
+          INSERT INTO audit_log (..., 'REVERSED', ...);
+        COMMIT
+
+Reversal restores the previous state and leaves the entire history intact, which
+is precisely what the audit design exists to make possible. A reversed claim is
+visible in the timeline forever.
+
+================================================================================
+12. FLOW I — VIEWING ITEM HISTORY
+================================================================================
+
+------------------------------------------------------------------------------
+12.1 S21 — Timeline
+------------------------------------------------------------------------------
+
+  ▸ DB  SELECT * FROM v_item_timeline
+         WHERE entity_type = $1 AND entity_id = $2
+         ORDER BY changed_at, audit_id
+
+  Rendered as a vertical timeline:
+
+    10 Sep 2026, 18:42   Report created                      Ananya
+                         Status: OPEN
+
+    11 Sep 2026, 09:15   Match suggested                     System
+                         Match #302, score 98 (STRONG)
+
+    11 Sep 2026, 11:03   Claim filed                         Ananya
+                         Claim #501
+
+    11 Sep 2026, 14:20   Claim approved                      Rahul
+                         Status: OPEN → MATCHED
+
+    12 Sep 2026, 10:07   Item collected                      Ananya
+                         Status: MATCHED → RESOLVED
+
+Access is restricted to parties to the item: the reporter, the finder, any
+claimant on it, and staff. The audit_id is used as the tiebreaker in the sort,
+which matters because multiple rows written in one transaction carry an
+identical changed_at — the subtlety identified in TRD section 6.3.
+
+This screen is also the demonstration artefact for the temporal aspect of the
+project. It makes the append-only log visible and comprehensible, and it is the
+natural place to show an examiner that nothing is ever overwritten.
+
+================================================================================
+13. FLOW J — STAFF CONSOLE
+================================================================================
+
+------------------------------------------------------------------------------
+13.1 S23 — Rapid Intake
+------------------------------------------------------------------------------
+
+Optimised for a different task: entering ten items in ten minutes at a desk with
+a keyboard.
+
+  - Location defaults to the previous entry's value and persists across
+    submissions within a session.
+  - Date defaults to today and is rarely touched.
+  - Tab order runs straight down the form with no traps.
+  - Enter submits and immediately returns a fresh form with the same defaults,
+    focus in the first field.
+  - A running list of the session's entries appears alongside, each with a
+    generated shelf reference, so the operator can write labels in a batch.
+  - Finder may be recorded as "Anonymous" with an optional note
+    ("handed in by a student, name not given"), which is what the nullable
+    found_items.user_id and the ck_found_identity constraint exist for.
+
+------------------------------------------------------------------------------
+13.2 S24 — Ageing Report
+------------------------------------------------------------------------------
+
+  ▸ DB  query Q7 from the TRD catalogue
+
+  Three tabs: over 30 days, over 60 days, over 90 days. Each row shows the
+  item, the storage reference, days held, and whether any claim was ever filed.
+  Bulk action: mark a selection as DISPOSED, with a mandatory note, writing one
+  audit row per item.
+
+------------------------------------------------------------------------------
+13.3 S22 — Staff Dashboard
+------------------------------------------------------------------------------
+
+  - Claims awaiting staff verification (sensitive and high-value categories)
+  - Claims escalated by a finder
+  - Claims pending longer than seven days
+  - Users with three or more rejected claims in thirty days (query Q10)
+  - Quick search by shelf reference or found id
+
+================================================================================
+14. FLOW K — ADMINISTRATIVE ANALYTICS
+================================================================================
+
+------------------------------------------------------------------------------
+14.1 S27 — Analytics
+------------------------------------------------------------------------------
+
+Five panels, each backed by a view, each read-only.
+
+  Panel 1  Headline figures from v_recovery_stats: reported, recovered,
+           recovery percentage, median days to recovery, for the selected
+           period.
+
+  Panel 2  Loss hotspots from v_loss_hotspots: a ranked bar list with
+           percentage of total and rank within zone.
+
+  Panel 3  The lost-versus-found divergence by location. Locations where many
+           items are lost and few are found are the actionable output of the
+           whole system: they are where a collection box belongs.
+
+  Panel 4  Category distribution, lost against found, from query Q4.
+
+  Panel 5  Match band conversion from query Q6 — the instrument for tuning the
+           scoring weights, showing for each band how many suggestions became
+           approved claims.
+
+Every panel states the query that produced it, on hover, which is a small
+feature with a large payoff in a viva: an examiner asking "how did you compute
+that" gets the answer on screen.
+
+------------------------------------------------------------------------------
+14.2 S26 — Reference Data
+------------------------------------------------------------------------------
+
+  → Add location / category / colour / brand
+      ▸ DB  INSERT, immediately available in report forms
+  → Deactivate
+      ▸ DB  UPDATE ... SET is_active = false
+      Row disappears from new-report selectors; existing references unaffected.
+  → Delete
+      ▸ DB  DELETE, which the database refuses with 23503 if the row is in use
+      ⇒ "This location is used by 47 reports and cannot be deleted.
+         Deactivate it instead so it stops appearing in new reports."
+
+The delete-refused path is a good screen to demonstrate. It shows referential
+integrity being enforced by the database and surfaced as a helpful message
+rather than as a crash, which is exactly the relationship between the two that
+the project is meant to illustrate.
+
+================================================================================
+15. STATE DIAGRAMS
+================================================================================
+
+------------------------------------------------------------------------------
+15.1 Lost Item
+------------------------------------------------------------------------------
+
+                        ┌──────────┐
+          create        │          │   withdraw
+      ───────────────►  │   OPEN   │ ──────────────► CLOSED_BY_USER
+                        │          │
+                        └────┬─────┘
+                   claim     │          90 days
+                   approved  │      ┌──────────────► EXPIRED
+                             ▼      │
+                        ┌──────────┐│
+                        │ MATCHED  ││
+                        └────┬─────┘│
+                 handover    │      │
+                 confirmed   ▼      │
+                        ┌──────────┐│
+                        │ RESOLVED │◄┘  (direct, if the owner recovers it
+                        └──────────┘     without the system)
+
+  Reversal: MATCHED → OPEN, staff only.
+
+------------------------------------------------------------------------------
+15.2 Found Item
+------------------------------------------------------------------------------
+
+          create      ┌────────────┐   claim approved   ┌──────────┐
+      ─────────────►  │ AVAILABLE  │ ─────────────────► │ CLAIMED  │
+                      └─────┬──────┘                    └────┬─────┘
+                            │                                │
+                 90 days    │                     handover   │
+                 unclaimed  ▼                     confirmed  ▼
+                      ┌────────────┐                   ┌──────────┐
+                      │  DISPOSED  │                   │ RETURNED │
+                      └────────────┘                   └──────────┘
+
+  Reversal: CLAIMED → AVAILABLE, staff only.
+
+------------------------------------------------------------------------------
+15.3 Claim
+------------------------------------------------------------------------------
+
+                      ┌───────────┐
+          create ───► │  PENDING  │
+                      └─────┬─────┘
+             ┌──────────────┼──────────────┐
+    approve  │      reject  │    withdraw  │
+             ▼              ▼              ▼
+      ┌────────────┐  ┌───────────┐  ┌────────────┐
+      │  APPROVED  │  │ REJECTED  │  │ WITHDRAWN  │
+      └─────┬──────┘  └───────────┘  └────────────┘
+            │
+   complete │           staff reversal
+            ▼          ┌──────────────► REVERSED
+      ┌────────────┐   │
+      │ COMPLETED  │───┘
+      └────────────┘
+
+------------------------------------------------------------------------------
+15.4 Match
+------------------------------------------------------------------------------
+
+                      ┌─────────────┐
+      generated ────► │  SUGGESTED  │ ◄────────────┐
+                      └──┬───┬───┬──┘              │ claim rejected
+            claim filed  │   │   │  user dismisses │
+                         ▼   │   ▼                 │
+                 ┌──────────┐│ ┌──────────────────┐│
+                 │ CLAIMED  ├┘ │ REJECTED_BY_USER ││
+                 └────┬─────┘  └──────────────────┘│
+        claim approved│                            │
+                      ▼                            │
+                 ┌───────────┐                     │
+                 │ CONFIRMED │                     │
+                 └───────────┘                     │
+                                                   │
+      other match on the same found item ──────────┘
+      becomes INVALIDATED
+
+================================================================================
+16. ERROR, EMPTY AND EDGE-CASE FLOWS
+================================================================================
+
+------------------------------------------------------------------------------
+16.1 Empty States
+------------------------------------------------------------------------------
+
+Every list screen has a designed empty state, and each one explains a cause and
+offers an action.
+
+  S04 dashboard, no reports
+      "Nothing here yet." + both report actions.
+
+  S09 browse, no items at all
+      "No items have been reported found yet. If you found something,
+       you could be the first." + report found action.
+
+  S09 browse, filters exclude everything
+      "No items match these filters." + "Clear filters" action.
+      Critically distinct from the previous message: the first says the system
+      is empty, the second says the query is narrow, and conflating them makes
+      users think the product is broken.
+
+  S13 matches, none
+      The standing-query explanation from section 5.3.
+
+  S18 verification queue, empty
+      "Nothing waiting for you." + a line about what will appear here.
+
+  S16 my claims, empty
+      "You have not claimed anything yet."
+
+------------------------------------------------------------------------------
+16.2 Error Flows
+------------------------------------------------------------------------------
+
+  Validation failure
+      Inline, field-level, on blur and again on submit. The message names the
+      field and the correction: "Choose a date on or before today", not
+      "Invalid input".
+
+  409 on claim approval
+      Handled in section 10.2. The message describes what happened in the
+      world, not what happened in the database.
+
+  Network failure mid-submission
+      The form retains its contents. A banner offers retry. Form state is held
+      in memory and, for the two report forms, mirrored to session storage, so
+      that an accidental refresh does not discard ninety seconds of typing.
+
+  403 on a route
+      Redirect to S04 with a banner. No detail about what exists.
+
+  404 on an item
+      Generic not-found screen. A found item that has been claimed returns 404
+      to a non-party, not 403, so that the claim status of an item is not
+      disclosed by the error code.
+
+  500
+      A neutral error screen with a reference code that appears in the server
+      log, so a student reporting a problem can quote something useful.
+
+------------------------------------------------------------------------------
+16.3 Edge Cases
+------------------------------------------------------------------------------
+
+The same user reports both sides. Prevented at match generation by BR-6's
+IS DISTINCT FROM predicate. No match is created, and the user needs none.
+
+Two claims arrive simultaneously. Section 10.2. One wins; the other receives a
+specific, honest message.
+
+A claimant withdraws after approval. Not permitted. The claim is APPROVED and
+the path forward is either completion or staff reversal. Allowing withdrawal
+after approval would leave the found item in a state nobody is responsible for.
+
+The finder deletes their account while a claim is pending. Anonymisation, not
+deletion: the claim survives, the verification routes to staff, and the audit
+trail is intact. This is the concrete payoff of the anonymise-don't-delete
+decision in the TRD.
+
+A report is edited after a claim is filed against one of its matches. Blocked.
+S12 offers Edit only while status is OPEN and no claim exists on any of its
+matches, because editing the description after a claimant has committed to a
+proof would undermine the verification.
+
+An item is found before it is reported lost. Common and handled: the found
+report is created first and sits AVAILABLE; when the lost report arrives,
+generate_matches_for_lost finds it. The temporal component scores on the day
+difference regardless of the order in which the reports were filed, which is why
+the component keys on lost_date and found_date rather than on created_at. This
+distinction is easy to get wrong and produces a subtly broken system when it is.
+
+A user reports the same loss twice. Not blocked, because a person may genuinely
+lose two similar items. The duplicate produces duplicate matches, which is
+visible and harmless. Admin merge is a post-MVP item.
+
+Clock skew across midnight. All timestamps are UTC at rest and converted at the
+presentation layer, so an item reported at 00:30 IST is not displayed as the
+previous day.
+
+================================================================================
+17. CROSS-CUTTING BEHAVIOURS
+================================================================================
+
+------------------------------------------------------------------------------
+17.1 Loading
+------------------------------------------------------------------------------
+
+Under 300 milliseconds: nothing. A spinner that flashes is worse than no
+spinner.
+300 milliseconds to two seconds: skeleton placeholders matching the shape of
+the content that will arrive, so the layout does not jump.
+Over two seconds: skeleton plus a progress message.
+Form submission: the button enters a disabled loading state, which also prevents
+the double-submit that would otherwise create two reports.
+
+------------------------------------------------------------------------------
+17.2 Confirmation
+------------------------------------------------------------------------------
+
+Destructive and irreversible actions require a modal confirmation: withdraw a
+report, dismiss a match, approve a claim, reject a claim, dispose of an item.
+Non-destructive actions do not, because a confirmation on every action trains
+people to dismiss confirmations without reading them.
+
+Dismissing a match is confirmed and additionally undoable for ten seconds. It is
+the only action with both, because it is easy to trigger accidentally on a phone
+and because dismissing the correct match is the single most damaging user error
+available in the product.
+
+------------------------------------------------------------------------------
+17.3 Feedback
+------------------------------------------------------------------------------
+
+Every state-changing action produces a visible acknowledgement within one second:
+a toast, a banner, or a screen transition. An action that appears to do nothing
+will be repeated, and a repeated claim submission is a real problem.
+
+------------------------------------------------------------------------------
+17.4 Notifications (post-MVP)
+------------------------------------------------------------------------------
+
+A badge on the navigation bar, a notification centre at /notifications, and rows
+generated on four events: a new STRONG match on one of your reports, a claim
+filed on an item you found, a decision on a claim you filed, and a handover
+confirmation. Polling every sixty seconds while a tab is focused is sufficient
+and avoids a persistent connection.
+
+------------------------------------------------------------------------------
+17.5 Responsive Behaviour
+------------------------------------------------------------------------------
+
+The filter rail on S09 becomes a bottom sheet under 768 pixels. The two panels
+on S14 stack, with the user's own report first. The verification screen S19 is
+designed mobile-first, because it will overwhelmingly be used on a phone. Tables
+in the staff console become card lists rather than horizontally scrolling tables,
+because a horizontally scrolling table on a phone is unusable in practice.
+
+================================================================================
+18. END-TO-END SCENARIO WALKTHROUGHS
+================================================================================
+
+------------------------------------------------------------------------------
+18.1 Scenario 1 — The Happy Path
+------------------------------------------------------------------------------
+
+10 September, 18:42. Ananya opens FoundIt on her phone. Not signed in, so S01.
+She taps "I lost something", is routed to S03 with return=/report/lost,
+registers instead, and lands on S06.
+
+She types "AirPods". The category selector jumps to Electronics. She picks
+Central Library from the location search after typing "lib". The date is already
+10 September. She taps the white swatch, selects Apple, and types "black
+charging case with a small scratch near the hinge". Elapsed: 71 seconds.
+
+Submit. The transaction inserts the row, runs generate_matches_for_lost, finds
+nothing above the floor, writes the audit row, commits in 94 milliseconds.
+
+S08, third variant. "Your report is live. Nothing matching has been found yet.
+From now on, every item anyone reports finding will be checked against your
+description automatically." She browses, sees nothing, closes the app.
+
+11 September, 09:15. Rahul finds the earphones on a library table. He reports
+them on S07: "AirPods", Electronics, Central Library, today, white, Apple,
+public description "white earphones in a black case", private detail "small blue
+sticker inside the lid", custody "I left it at the Security Desk", storage
+"Security Desk, Main Gate".
+
+Submit. generate_matches_for_found runs. Ananya's lost item is OPEN, the
+category matches, the date gap is one day, the brand matches, the colour matches,
+the location matches, and the shared keywords are "black" and "case". Score: 20 + 20 + 20 +
+15 + 13 + 10 = 98. Band: STRONG. The match row is inserted with its reason_json.
+
+S08 for Rahul: "Thank you. We have recorded that it is at the Security Desk. We
+have also found 1 person who reported losing something similar."
+
+11 September, 10:58. Ananya opens the app. S04 shows a card: "1 strong match on
+your AirPods report." She taps through to S14 and sees the two panels and the
+breakdown summing to 98.
+
+She taps "This is mine". S15 asks her to describe something distinctive. She
+writes: "There's a small blue sticker inside the lid, and the case is scratched
+near the hinge." Submit at 11:03.
+
+11 September, 14:20. Rahul sees the verification prompt. S19 shows his own words
+and hers side by side. The blue sticker is in both. He taps "Yes, it is theirs",
+confirms, and approve_claim() runs: the found item locks, its status is
+re-verified as AVAILABLE, the claim becomes APPROVED, the found item becomes
+CLAIMED, the lost item becomes MATCHED, the match becomes CONFIRMED, and three
+audit rows are written. All inside one transaction, 180 milliseconds.
+
+Ananya's S17 now shows "Confirmed. This item is yours." with Rahul's contact
+details and the collection instruction.
+
+12 September, 10:07. She collects it from the desk and taps "I have collected
+it". The completion transaction sets the claim to COMPLETED, the found item to
+RETURNED, the lost item to RESOLVED, and writes three more audit rows. The
+landing page counter increments.
+
+S21 for her lost item now shows six timeline entries spanning two days.
+
+------------------------------------------------------------------------------
+18.2 Scenario 2 — Contested Claim
+------------------------------------------------------------------------------
+
+Two students both report losing black earphones near the library on the same
+day. Both are matched to one found item at scores of 87 and 84. Both file
+claims within minutes of each other.
+
+Rahul opens S18 and sees two pending claims on the same item. He opens the first
+at 14:20:03 and the second at 14:20:05 in another tab.
+
+He approves the first. The transaction locks found_items row 204, reads status
+AVAILABLE, and proceeds through all nine steps including step 7, which rejects
+the second claim with the note "Item claimed by another verified owner".
+
+He then approves the second. Its transaction attempts the locking read, blocks
+briefly, acquires the lock after the first commits, reads status CLAIMED, and
+raises ITEM_NOT_AVAILABLE. The API returns 409. S19 shows: "Someone else's claim
+on this item was approved a moment ago. Nothing has changed here."
+
+The second claimant's S17 shows REJECTED with the neutral system note. Their
+lost report returns to OPEN and continues matching against future finds. Their
+flagged_count is not incremented, because the rejection was systemic rather than
+a failed proof — a distinction the reject-by-verifier path and the
+reject-by-transaction path must handle differently, and one that is easy to miss.
+
+------------------------------------------------------------------------------
+18.3 Scenario 3 — Failed Proof
+------------------------------------------------------------------------------
+
+A student browsing S09 sees a listed water bottle they would like. They have no
+lost report, so S10 offers "This is mine" and routes them to S06 pre-filled with
+the listing's category, location and colour.
+
+They file the report. Because it was pre-filled from the listing, the match
+scores 85 and appears immediately. They claim it, and S15 asks for a
+distinguishing detail. They write "it's blue and it's a Milton" — both facts
+taken from the public listing.
+
+The finder sees their own private detail ("the name 'Sneha K' is written on the
+base in marker") next to the claimant's answer. Nothing corresponds. They select
+"The detail they gave does not match" and reject.
+
+The claimant's S17 shows the neutral rejection. No indication of what the
+correct answer was, and no indication of how close they came. Their
+flagged_count increments to 1. Two more of these within thirty days and query
+Q10 surfaces them on the staff dashboard.
+
+The item returns to AVAILABLE and the match returns to SUGGESTED, remaining
+available to a genuine owner.
+
+------------------------------------------------------------------------------
+18.4 Scenario 4 — Found Before Lost
+------------------------------------------------------------------------------
+
+A calculator is found in a lab on 5 September and reported the same day. No lost
+report exists, so generate_matches_for_found produces nothing. The item sits
+AVAILABLE.
+
+On 8 September the owner realises it is missing and files a lost report dated 5
+September. generate_matches_for_lost runs, finds the found item within the
+thirty-day window, computes a date gap of zero days (found_date 5 September
+minus lost_date 5 September), and awards the full 15 temporal points.
+
+The match scores 90 and appears on the owner's confirmation screen immediately.
+Three days elapsed between the loss and the report, and none of it mattered,
+because the temporal component keys on the event dates rather than the report
+dates. Had it keyed on created_at, the gap would have been three days and the
+score would have been 81 — still strong, but wrong for the wrong reason, and
+increasingly wrong as the reporting delay grows.
+
+================================================================================
+19. FLOW-TO-REQUIREMENT TRACEABILITY
+================================================================================
+
+  Flow              Screens          PRD Requirements Satisfied
+  ----------------  ---------------  ------------------------------------------
+  A Auth            S02, S03         FR-1.1 – FR-1.7
+  B Report lost     S06, S08, S12    FR-2.1 – FR-2.11, US-2
+  C Report found    S07, S08         FR-3.1 – FR-3.8, US-3
+  D Browse          S09, S10         FR-4.1 – FR-4.6, US-4
+  E Matches         S13, S14         FR-5.1 – FR-5.9, US-5
+  F Claim           S15, S16, S17    FR-6.1 – FR-6.3, FR-6.5, US-6
+  G Verify          S18, S19         FR-6.4, FR-6.6 – FR-6.9, US-7
+  H Handover        S20              FR-6.10, US-8
+  I History         S21              FR-7.1 – FR-7.5, US-9
+  J Staff           S22, S23, S24    FR-3.8, FR-6.11, FR-6.12, US-10
+  K Admin           S25, S26, S27    FR-8.1 – FR-8.5, US-11, US-12
+
+  Cross-cutting behaviours in section 17 satisfy NFR-6.1 through NFR-6.6.
+  The privacy boundaries described in sections 7.3, 9.2 and 16.2 satisfy
+  NFR-4.4, NFR-5.1 and FR-3.4.
+  The concurrency handling in sections 10.2 and 18.2 is the user-facing surface
+  of FR-6.6 and BR-12.
+
+================================================================================
+END OF DOCUMENT — FI-AFL-001 v1.1
+================================================================================

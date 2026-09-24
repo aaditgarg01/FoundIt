@@ -1,0 +1,1148 @@
+================================================================================
+FOUNDIT — SMART CAMPUS LOST & FOUND
+IMPLEMENTATION PLAN — FIVE PHASES
+================================================================================
+
+Document ID .............. FI-IMP-001
+Version .................. 1.1
+Status ................... Baselined
+Date ..................... 18 September 2026
+Author ................... Aadit Garg (25BCE2315)
+Depends On ............... FI-PRD-001, FI-TRD-001, FI-AFL-001, FI-DFL-001,
+                           FI-TFL-001
+
+================================================================================
+TABLE OF CONTENTS
+================================================================================
+
+1.  Planning Philosophy
+2.  Assumptions, Team and Calendar
+3.  Phase Overview
+4.  Phase 1 — Foundation and Data Model
+5.  Phase 2 — Core Domain and the Matching Engine
+6.  Phase 3 — Claims, Transactions and Audit
+7.  Phase 4 — Interface and Experience
+8.  Phase 5 — Hardening, Evidence and Delivery
+9.  Cross-Phase Workstreams
+10. Task Dependency Map
+11. Risk Management Across Phases
+12. Quality Gates
+13. Deliverable Inventory
+14. Demonstration Plan
+15. Contingency and Descoping Ladder
+
+================================================================================
+1. PLANNING PHILOSOPHY
+================================================================================
+
+------------------------------------------------------------------------------
+1.1 Database First, and Genuinely First
+------------------------------------------------------------------------------
+
+The sequencing principle that governs this plan is that the data model is built,
+normalised, indexed and tested before a single line of user interface is
+written. This is not the natural instinct. The natural instinct is to build a
+screen, because a screen is visible and a schema is not, and progress that
+cannot be seen feels like no progress.
+
+The instinct is wrong here for three reasons.
+
+Schema changes are expensive downstream. A column added in week two costs a
+migration. The same column added in week six costs a migration, a repository
+change, a service change, an API contract change, a client type change, a form
+field, a validation rule and a test update. The cost multiplier is roughly the
+number of layers already built on top.
+
+The schema is the deliverable. This is a database systems project. A beautiful
+interface over a denormalised schema scores badly; a plain interface over a
+rigorous schema scores well. The effort should follow the marks.
+
+The hard problems are all in the data layer. Matching, concurrency, integrity
+and audit are the four genuinely difficult parts of FoundIt, and all four are
+database problems. Solving them first means the remaining work is
+straightforward, and a project whose hard parts are finished early is a project
+that can absorb a bad week.
+
+------------------------------------------------------------------------------
+1.2 Vertical Slices Within Phases
+------------------------------------------------------------------------------
+
+Within each phase after the first, work proceeds in vertical slices — one
+feature taken from schema through repository, service, API and test before the
+next begins. Horizontal layering, in which every repository is written, then
+every service, then every controller, defers integration to the end and
+concentrates risk exactly where there is no time left to absorb it.
+
+------------------------------------------------------------------------------
+1.3 Definition of Done, Applied Per Task
+------------------------------------------------------------------------------
+
+A task is done when all six hold:
+
+  1. The behaviour works on the happy path.
+  2. At least one failure path is handled and produces a comprehensible error.
+  3. Any rule the task implies is expressed as a database constraint where it
+     is expressible as one.
+  4. An automated test exercises both a success and a failure case.
+  5. The relevant documentation section is written or amended.
+  6. The code is committed with a message naming the requirement identifier it
+     satisfies.
+
+Point 3 is the one most often skipped and the one that most distinguishes this
+project from a typical submission. Point 6 makes the traceability matrix a
+by-product rather than a chore at the end.
+
+------------------------------------------------------------------------------
+1.4 Never Carry Broken Work Across a Phase Boundary
+------------------------------------------------------------------------------
+
+Each phase ends with a gate. Work that does not pass the gate is either
+completed before the next phase begins or is formally descoped using the ladder
+in section 15. Carrying half-finished work forward is how a project arrives at
+its final week with six things at eighty percent and nothing to demonstrate.
+
+================================================================================
+2. ASSUMPTIONS, TEAM AND CALENDAR
+================================================================================
+
+------------------------------------------------------------------------------
+2.1 Assumptions
+------------------------------------------------------------------------------
+
+  A1  Team of three, each contributing roughly 10 hours per week.
+  A2  Ten calendar weeks available before submission.
+  A3  All members have working SQL knowledge; one has prior web experience.
+  A4  PostgreSQL 15 and Node 20 available on every machine, via Docker.
+  A5  A shared Git repository with branch protection on the main branch.
+  A6  Access to a list of campus buildings and rooms for seeding.
+  A7  No external approval gates that could block progress.
+
+------------------------------------------------------------------------------
+2.2 Roles
+------------------------------------------------------------------------------
+
+Roles are primary responsibilities, not exclusive territories. Every member
+reviews outside their area, because a schema reviewed only by its author is a
+schema with unreviewed assumptions.
+
+  Member A — Data and query owner
+      Schema, migrations, normalisation analysis, indexes, stored procedures,
+      the matching engine, query plan evidence, seed data generation.
+
+  Member B — Application and API owner
+      Service layer, transaction orchestration, controllers, authentication,
+      authorisation, error mapping, API tests.
+
+  Member C — Interface and evidence owner
+      Design system, React components, screens, accessibility, the
+      documentation set, the demonstration script and rehearsal.
+
+------------------------------------------------------------------------------
+2.3 Calendar
+------------------------------------------------------------------------------
+
+  Week   Phase                                    Gate
+  -----  ---------------------------------------  -------------------------
+  1–2    Phase 1 — Foundation and Data Model      Schema gate
+  3–4    Phase 2 — Core Domain and Matching       Matching gate
+  5–6    Phase 3 — Claims, Transactions, Audit    Transaction gate
+  7–8    Phase 4 — Interface and Experience       Usability gate
+  9–10   Phase 5 — Hardening and Delivery         Release gate
+
+Total effort: roughly 300 person-hours. The estimate assumes learning time is
+included and that some of it is spent badly, which it always is.
+
+------------------------------------------------------------------------------
+2.4 Working Agreements
+------------------------------------------------------------------------------
+
+Daily fifteen-minute synchronisation, asynchronous if necessary: what I did,
+what I am doing, what is blocking me.
+
+All work on branches named by requirement identifier. Merge to main only through
+a reviewed pull request. Main is always in a demonstrable state — a broken main
+on the day before a review is an avoidable disaster.
+
+No manual schema changes, ever. If it is not in a migration it does not exist.
+
+A decision that is debated for more than twenty minutes is written down as a
+decision record and moved on from. The cost of the wrong choice is almost always
+lower than the cost of the argument.
+
+================================================================================
+3. PHASE OVERVIEW
+================================================================================
+
+  Phase  Theme                    Weeks  Primary Output
+  -----  -----------------------  -----  ------------------------------------
+  1      Foundation & Data Model  1–2    Migrated schema, seed data,
+                                         normalisation analysis, ER diagram
+  2      Core Domain & Matching   3–4    Report creation, working matching
+                                         engine, indexes with plan evidence
+  3      Claims & Transactions    5–6    Claim lifecycle, approval transaction,
+                                         audit trail, concurrency proof
+  4      Interface & Experience   7–8    All MVP screens, design system,
+                                         accessibility
+  5      Hardening & Delivery     9–10   Evaluation dataset, measured success
+                                         criteria, documentation, rehearsed
+                                         demonstration
+
+  Cumulative capability at each gate:
+
+  After 1: The database exists, is correct, is seeded, and is defensible.
+  After 2: A report can be filed via the API and matches appear, correctly
+           scored, fast.
+  After 3: The entire lost-to-returned lifecycle works via the API, safely
+           under concurrency, with complete history.
+  After 4: A person can do all of that in a browser without being confused.
+  After 5: Every claim in the documentation is backed by a measurement, and
+           the demonstration runs without intervention.
+
+================================================================================
+4. PHASE 1 — FOUNDATION AND DATA MODEL
+================================================================================
+Weeks 1–2 · ~60 person-hours
+
+------------------------------------------------------------------------------
+4.1 Objective
+------------------------------------------------------------------------------
+
+Produce a complete, migrated, seeded, constrained relational schema, together
+with the written normalisation analysis that justifies it. At the end of this
+phase there is no application, and that is correct.
+
+------------------------------------------------------------------------------
+4.2 Task Breakdown
+------------------------------------------------------------------------------
+
+  T1.1  Repository, Docker Compose, PostgreSQL 15, migration tooling      4h  A
+        Exit: `npm run migrate` applies zero migrations without error on a
+        fresh database.
+
+  T1.2  Requirements consolidation and entity identification               6h  All
+        Read the PRD together. List candidate entities. Argue about them.
+        Produce the agreed entity list with one-line responsibilities.
+        Exit: a written entity inventory all three members agree with.
+
+  T1.3  ER diagram, conceptual                                             6h  A, C
+        Entities, relationships, cardinalities, participation. Drawn, not
+        described. Include the two-role USERS-to-CLAIMS relationship and the
+        CATEGORIES self-reference, because they are the two constructs an
+        examiner will ask about.
+        Exit: a diagram file in the repository.
+
+  T1.4  Functional dependency analysis                                     8h  A
+        For each relation: attribute set, non-trivial FDs, attribute closures,
+        candidate keys, prime attributes.
+        This is the task most likely to be rushed and the one that most repays
+        being done properly. It is the evidence for Module 2.
+        Exit: the FD document with closures shown, not asserted.
+
+  T1.5  Normalisation to 3NF with the decomposition narrative              6h  A
+        Start from the unnormalised REPORT_RAW relation. Show the 1NF failure
+        (status_history as a repeating group). Show the four transitive
+        dependencies. Decompose. Then find and address the matches
+        score→band violation, presenting all three candidate responses and the
+        chosen one.
+        Exit: the normalisation section of the TRD, complete.
+
+  T1.6  Enumerated types and reference tables migration                    4h  A
+        001_types.sql, 002_reference_tables.sql.
+        Exit: types and six reference relations exist.
+
+  T1.7  Core relations migration                                           8h  A
+        003_users.sql, 004_items.sql, 005_matches_claims.sql, 006_audit.sql.
+        Every constraint from TRD section 5, named per Appendix C.
+        Exit: `\d+` on every table shows the expected constraints.
+
+  T1.8  Referential action decisions                                       3h  A, B
+        For each of the fourteen foreign keys, decide and record ON DELETE.
+        Do not default everything to CASCADE, which is the lazy answer and the
+        wrong one for eleven of the fourteen.
+        Exit: the referential policy table in the TRD.
+
+  T1.9  Reference data seeding                                             5h  A
+        Twenty categories with their requires_staff and is_sensitive flags,
+        eighty locations with building and zone, twenty-five colours with hex
+        values, sixty brands, three score bands, twelve config rows.
+        Exit: `npm run seed:reference` is idempotent and complete.
+
+  T1.10 Synthetic data generator                                           6h  A
+        Not uniform random. Category frequency long-tailed, location frequency
+        concentrated, dates clustered around term dates. Parameterised by
+        volume so the same script produces the 100-row development set and the
+        20,000-row performance set.
+        Exit: `npm run seed:data -- --lost 1000 --found 400` works.
+
+  T1.11 Constraint test suite                                              6h  A, B
+        One test per constraint, attempting the violation and asserting the
+        SQLSTATE. Roughly forty tests.
+        Exit: all pass; commenting out any constraint makes exactly one fail.
+
+  T1.12 Phase 1 documentation                                             4h  C
+        ER diagram, data dictionary, FD analysis, normalisation narrative,
+        referential policy — assembled and readable.
+
+------------------------------------------------------------------------------
+4.3 Schema Gate
+------------------------------------------------------------------------------
+
+  [ ] Migrations apply cleanly from empty and roll back cleanly
+  [ ] Every relation has a primary key
+  [ ] Every foreign key declares an explicit ON DELETE, decided not defaulted
+  [ ] Every status column is domain-constrained
+  [ ] Every date column that can be wrong has a CHECK
+  [ ] The three biconditional consistency CHECKs exist
+  [ ] Reference seed is idempotent
+  [ ] Synthetic generator produces realistic distributions
+  [ ] All constraint tests pass
+  [ ] FD analysis exists with closures computed
+  [ ] 3NF argued per relation, and the matches violation found and addressed
+  [ ] Every team member can explain any constraint in the schema
+
+The last item is the real gate. A schema that only one member understands is a
+schema that will be defended by one member in a viva.
+
+------------------------------------------------------------------------------
+4.4 Common Failure Modes in This Phase
+------------------------------------------------------------------------------
+
+Treating normalisation as a formality to be written up afterwards. The analysis
+must precede the DDL, or the DDL will encode an unexamined design and the
+write-up will be a rationalisation.
+
+Making location a VARCHAR because it is faster to type. This single decision
+destroys matching, analytics and filtering simultaneously, and it is the most
+common defect in projects of this kind.
+
+Defaulting every foreign key to ON DELETE CASCADE. Cascade is correct for
+matches and wrong for the other eleven. A cascade from users would silently
+delete a person's entire history.
+
+Skipping the synthetic generator and hand-typing twenty rows. Twenty rows make
+every index look unnecessary and every query look fast. The performance work in
+Phase 2 becomes impossible.
+
+================================================================================
+5. PHASE 2 — CORE DOMAIN AND THE MATCHING ENGINE
+================================================================================
+Weeks 3–4 · ~65 person-hours
+
+------------------------------------------------------------------------------
+5.1 Objective
+------------------------------------------------------------------------------
+
+Reports can be created through an API, and matches are generated correctly,
+explainably and within budget. This is the phase in which the product's central
+claim becomes true.
+
+------------------------------------------------------------------------------
+5.2 Task Breakdown
+------------------------------------------------------------------------------
+
+  T2.1  Application skeleton and layering                                  5h  B
+        Express, the middleware chain in its fixed order, the connection pool,
+        the withTransaction helper, the error middleware, structured logging
+        with request ids.
+        Exit: `GET /api/v1/health` returns database connectivity status.
+
+  T2.2  Authentication                                                     8h  B
+        Registration with bcrypt at cost 12, sign-in with timing equalisation,
+        JWT issue and verification, refresh tokens in a sessions relation,
+        role middleware.
+        Exit: register, sign in, call a protected route, sign out, and find the
+        refresh token revoked.
+
+  T2.3  Reference data endpoints                                           3h  B
+        Read endpoints for the four vocabularies, loaded into memory at boot
+        with invalidation on admin write.
+        Exit: reference data served from cache, one query at boot.
+
+  T2.4  Lost report creation                                               6h  B
+        Validation, repository, service, controller. Transaction wrapping the
+        insert and the audit row.
+        Exit: POST /lost-items creates a row and an audit row atomically; every
+        constraint violation maps to a specific error code.
+
+  T2.5  Found report creation                                             6h  B
+        As above, plus the custody conditional, the private field, and the
+        private-duplicates-public service check.
+        Exit: as above, plus the conditional storage requirement enforced.
+
+  T2.6  Matching procedure, forward direction                             10h  A
+        generate_matches_for_lost in full: config reads, pre-filters, scoring
+        expression, band join, reason_json construction, ON CONFLICT.
+        Exit: called with a known anchor against a known fixture set, produces
+        exactly the hand-computed scores.
+
+  T2.7  Matching procedure, reverse direction                              4h  A
+        generate_matches_for_found, with the date predicate oriented so the
+        lost-side index remains usable.
+        Exit: symmetric correctness verified on the same fixtures.
+
+  T2.8  Twenty-pair verification fixture                                   5h  A
+        Twenty lost-found pairs with scores computed by hand on paper, spanning
+        the difficulty range and including the edge cases: zero-day gap,
+        found-before-lost, all-nulls-on-optionals, exactly-at-floor.
+        Exit: an automated test asserting all twenty, passing.
+
+  T2.9  Match generation wired into report creation                        3h  A, B
+        The procedure call inside the creation transaction, and the top-match
+        read-back for the response.
+        Exit: creating a report returns matches_generated and top_match.
+
+  T2.10 Match retrieval endpoints                                          5h  B
+        Ranked list for a lost item with the ownership predicate in the WHERE
+        clause; single match detail; dismissal.
+        Exit: requesting another user's matches returns 404, not 403.
+
+  T2.11 Index design with measured evidence                                8h  A
+        Seed to 10,000 and 10,000. EXPLAIN ANALYZE the match query. Capture the
+        sequential-scan plan. Create ix_found_match_probe and ix_lost_match_
+        probe. Capture the bitmap-scan plan. Record both, with buffer counts.
+        Then deliberately create the wrong-column-order index and show that the
+        planner declines it.
+        Exit: three plans captured in the repository with commentary.
+
+  T2.12 Browse and search                                                  6h  B
+        Dynamic predicate construction with bound parameters, the allow-listed
+        sort map, count(*) OVER () for the total, full-text search via the
+        generated tsvector columns and GIN indexes.
+        Exit: filters combine correctly; no user string reaches SQL text.
+
+  T2.13 Phase 2 documentation                                              4h  C
+        Matching specification, scoring rubric with worked examples, the index
+        evidence with before-and-after plans and the anti-pattern.
+
+------------------------------------------------------------------------------
+5.3 Matching Gate
+------------------------------------------------------------------------------
+
+  [ ] All twenty fixture pairs score exactly as hand-computed
+  [ ] Found-before-lost scores zero on the temporal component
+  [ ] Null optionals award zero and are not penalised further
+  [ ] Sparse pairs correctly cap below 100
+  [ ] reason_json components sum exactly to the stored total, always
+  [ ] Re-running generation is idempotent; no duplicate rows
+  [ ] Re-running does not overwrite a match past SUGGESTED
+  [ ] A user is never matched to their own report
+  [ ] Match generation under 200 ms at 10k × 10k
+  [ ] Before-and-after EXPLAIN captured with buffer counts
+  [ ] The wrong-column-order index demonstrably not chosen
+  [ ] Matches row count under 8× lost item count after seeding
+  [ ] Ownership enforced in the WHERE clause, not in application code
+
+------------------------------------------------------------------------------
+5.4 Common Failure Modes in This Phase
+------------------------------------------------------------------------------
+
+Computing the temporal component from created_at rather than from the event
+dates. Produces a system that quietly punishes users for reporting late, and the
+defect is invisible until someone reports a week-old loss.
+
+Writing the anchor predicate as a join condition rather than in the WHERE
+clause. Produces a hash join over the whole table. The query still returns
+correct results, so nothing fails — it is just twenty times slower, forever.
+
+Recomputing the score on the client for display. Guarantees a divergence the
+first time a weight changes.
+
+Building the browse filters with string concatenation. Works, demonstrates
+nothing, and is an injection vector.
+
+Testing matching only with rich fixtures where every attribute is populated. The
+null-handling paths are exactly where the bugs are.
+
+================================================================================
+6. PHASE 3 — CLAIMS, TRANSACTIONS AND AUDIT
+================================================================================
+Weeks 5–6 · ~60 person-hours
+
+------------------------------------------------------------------------------
+6.1 Objective
+------------------------------------------------------------------------------
+
+The full lifecycle from report to return works through the API, is safe under
+concurrency, and leaves a complete history. This phase contains the project's
+strongest single piece of evidence for Module 4.
+
+------------------------------------------------------------------------------
+6.2 Task Breakdown
+------------------------------------------------------------------------------
+
+  T3.1  Audit service                                                      5h  B
+        A single function used by every state-changing transaction, taking the
+        client so the write joins the caller's transaction rather than opening
+        its own.
+        Exit: no code path writes audit_log except through this function.
+
+  T3.2  Audit immutability                                                 2h  A
+        Privilege revocation on the application role plus the belt-and-braces
+        trigger.
+        Exit: UPDATE and DELETE on audit_log fail as the application role.
+
+  T3.3  Denormalised found_id on claims with its trigger                   4h  A
+        The column, the foreign key, the BEFORE INSERT trigger, and the
+        alphabetical-ordering comment explaining why the trigger is named as
+        it is.
+        Exit: inserting a claim populates found_id automatically; a mismatch
+        is impossible.
+
+  T3.4  The partial unique index                                           2h  A
+        ux_one_approved_claim_per_found on claims(found_id) WHERE status IN
+        ('APPROVED','COMPLETED').
+        Exit: two approved claims on one found item cannot exist, even with
+        every application check removed.
+
+  T3.5  Claim creation                                                     6h  B
+        The five guards in ascending cost order, the combined ownership and
+        availability query, the transaction, the match status transition.
+        Exit: claiming your own find is refused by the trigger; a fourth
+        pending claim is refused by the service.
+
+  T3.6  approve_claim procedure                                           10h  A, B
+        The nine steps of TRD section 10.2, in the fixed lock order, with the
+        locking read before the trusted read.
+        Exit: approval updates claim, found item, lost item, competing claims,
+        matches and audit atomically.
+
+  T3.7  reject_claim and escalation                                        4h  B
+        Rejection with a canned reason, match returned to SUGGESTED, claimant
+        flagged_count incremented — but not for a systemic rejection produced
+        by step 7 of an approval, which is a distinction that must be coded
+        explicitly.
+        Exit: the two rejection paths are distinguishable in the data.
+
+  T3.8  complete_handover                                                  4h  B
+        The three-relation update with the biconditional CHECKs as the guard,
+        FOR UPDATE OF scoped to the claims row only.
+        Exit: a status update without its timestamp fails at write time.
+
+  T3.9  Concurrency test, automated                                        8h  A, B
+        Two connections, explicit synchronisation, both approving different
+        claims on one found item. Assert exactly one APPROVED. Then a fifty-way
+        version. Then the same test with FOR UPDATE removed, asserting the
+        failure, kept as a disabled test with a comment.
+        Exit: the passing test is in CI; the failing variant is documented.
+
+  T3.10 Deadlock ordering audit                                            3h  A
+        Walk every multi-relation transaction and confirm the global lock
+        order. Document it as a development standard.
+        Exit: the ordering rule written down and every transaction conforms.
+
+  T3.11 Audit timeline endpoint                                            4h  B
+        The v_item_timeline query with the audit_id tiebreaker, and the party
+        authorisation check.
+        Exit: three rows from one transaction display in insertion order.
+
+  T3.12 Audit consistency test                                             3h  A
+        Query Q8 as an automated test asserting zero rows, run against the
+        seeded dataset after a scripted full lifecycle.
+        Exit: passes; deliberately corrupting a status makes it fail.
+
+  T3.13 Expiry job                                                         4h  A
+        Batched at 500 with SKIP LOCKED, audited with a null actor.
+        Exit: runs, expires, does not block a concurrent user transaction.
+
+  T3.14 Phase 3 documentation                                              4h  C
+        Transaction design, ACID analysis against this specific transaction,
+        the isolation level argument, deadlock prevention, the concurrency
+        demonstration script.
+
+------------------------------------------------------------------------------
+6.3 Transaction Gate
+------------------------------------------------------------------------------
+
+  [ ] Fifty concurrent approvals on one item: exactly one succeeds
+  [ ] The forty-nine failures return ITEM_NOT_AVAILABLE, not a generic 500
+  [ ] With FOR UPDATE removed, the partial unique index still prevents the
+      double approval — verified, because defence in depth that has not been
+      tested is a claim, not a defence
+  [ ] Every audit write is inside its change's transaction
+  [ ] A rolled-back change leaves no audit row
+  [ ] audit_log is not updatable or deletable by the application role
+  [ ] Audit consistency query returns zero rows
+  [ ] Lock ordering is global and documented
+  [ ] The full lifecycle runs end to end through the API
+  [ ] The two-session psql demonstration is scripted and rehearsed
+  [ ] Every member can explain the transaction's ACID properties in terms of
+      this transaction, not in general
+
+------------------------------------------------------------------------------
+6.4 Common Failure Modes in This Phase
+------------------------------------------------------------------------------
+
+Reading the status before taking the lock. The most common concurrency error
+there is, and it leaves the original race window fully open while looking like a
+fix.
+
+Writing audit rows in a separate transaction. Produces exactly the orphans the
+consistency query exists to find.
+
+Approving without re-verifying status under the lock. The lock alone does not
+help if the decision was made on a value read before it.
+
+Incrementing flagged_count on systemic rejections. Punishes a user for losing a
+race they never entered.
+
+Locking every row produced by a join. Widens the lock footprint and creates a
+deadlock opportunity with the approval transaction, which locks found_items
+first.
+
+================================================================================
+7. PHASE 4 — INTERFACE AND EXPERIENCE
+================================================================================
+Weeks 7–8 · ~65 person-hours
+
+------------------------------------------------------------------------------
+7.1 Objective
+------------------------------------------------------------------------------
+
+Every MVP flow is usable in a browser by someone who has never seen the product
+and has not been told anything about it.
+
+------------------------------------------------------------------------------
+7.2 Task Breakdown
+------------------------------------------------------------------------------
+
+  T4.1  React application shell and routing                                4h  C
+        Vite, the route table from the App Flow document, protected routes,
+        the return-path mechanism through authentication.
+        Exit: deep-linking to a protected route survives a sign-in.
+
+  T4.2  Design tokens and base styles                                      4h  C
+        Every token from the Design Flow document as CSS custom properties.
+        Exit: no hard-coded colour or pixel value in any component.
+
+  T4.3  Component library                                                 12h  C
+        Button, Input, Textarea, Select, SearchableSelect, ColourSwatch,
+        StatusBadge, ItemCard, MatchCard, Timeline, EmptyState, Modal,
+        BottomSheet, Toast, Skeleton.
+        Each with all five states and keyboard support.
+        Exit: a component gallery route rendering every component in every
+        state, which is also the fastest way to review them.
+
+  T4.4  Authentication screens                                             5h  C
+        Registration, sign-in, the duplicate-email path with its pre-filled
+        sign-in link.
+        Exit: every error path renders a specific, helpful message.
+
+  T4.5  Report forms                                                      10h  C
+        Both forms, category inference from item name, searchable location
+        select grouped by building, colour swatch selector, the two-field
+        public/private treatment with its tinted container, sticky submit,
+        session-storage autosave.
+        Exit: a first-time user completes the lost form in under ninety
+        seconds, timed with five testers.
+
+  T4.6  Confirmation screens                                               4h  C
+        All three variants, with the no-match variant's standing-query
+        explanation written and reviewed word by word.
+        Exit: each variant renders from a real API response.
+
+  T4.7  Browse and item detail                                             8h  C
+        Card grid, filter rail becoming a bottom sheet, active filter chips,
+        live count, URL-synchronised filters, load-more pagination.
+        Exit: a filtered view survives a refresh and is shareable.
+
+  T4.8  Match list and match detail                                        8h  C
+        Band grouping, weak collapse, the two-panel comparison, the reason
+        breakdown rendered from reason_json with right-aligned tabular points.
+        Exit: the displayed points visibly sum to the displayed badge.
+
+  T4.9  Claim, verification and handover screens                           8h  C
+        The claim form with its explanation, the verification screen with the
+        two differently tinted quote blocks, the 409 conflict message, the
+        handover screen with the draft message.
+        Exit: the 409 renders as the written message, not as an error toast.
+
+  T4.10 Timeline screen                                                    3h  C
+        The rail, nodes, transitions rendered as "Open → Matched".
+        Exit: a full lifecycle renders as six legible entries.
+
+  T4.11 Dashboard                                                          4h  C
+        Attention-ordered: alerts, active reports, dormant reports,
+        verification queue.
+        Exit: a user with a strong match sees it above everything else.
+
+  T4.12 Empty, loading and error states                                    5h  C
+        Every list. The two distinct browse empty states. Skeletons matching
+        content shape, delayed 300 ms.
+        Exit: no screen anywhere renders a bare "No results".
+
+  T4.13 Accessibility pass                                                 6h  C
+        Keyboard path through every flow, focus management in modals, aria
+        wiring, contrast verification recorded per pair, screen-reader run
+        through both core journeys.
+        Exit: both core journeys completable with the keyboard alone and with a
+        screen reader.
+
+  T4.14 Responsive pass                                                    4h  C
+        Every screen at 360, 768 and 1440. Tables to card lists. S14 panel
+        stacking order.
+        Exit: no horizontal scroll anywhere at 360 px.
+
+------------------------------------------------------------------------------
+7.3 Usability Gate
+------------------------------------------------------------------------------
+
+  [ ] All MVP flows completable in a browser end to end
+  [ ] Lost report under ninety seconds, timed, five first-time testers
+  [ ] Every screen has designed empty, loading and error states
+  [ ] The private field's purpose is understood by testers without prompting
+  [ ] Match reasons visibly sum to the score
+  [ ] The 409 conflict message reads as an explanation, not a failure
+  [ ] Keyboard-only completion of both core journeys
+  [ ] Screen-reader completion of both core journeys
+  [ ] Contrast verified and recorded for every text/background pair
+  [ ] No horizontal scroll at 360 px on any screen
+  [ ] No hard-coded colour or spacing value in any component
+  [ ] No private field present in any public response payload
+
+------------------------------------------------------------------------------
+7.4 Common Failure Modes in This Phase
+------------------------------------------------------------------------------
+
+Building screens before the component library. Produces fifteen slightly
+different buttons and a week of reconciliation.
+
+Placeholder-as-label. Saves vertical space and costs comprehension for anyone
+interrupted mid-form.
+
+Leaving empty states until last. They are the most-seen state in a new system
+and they will be written carelessly at 2 a.m. if deferred.
+
+Treating accessibility as a retrofit. Focus management and semantic structure
+are cheap to build in and expensive to add afterwards.
+
+Letting a private field into a response payload because it was already on the
+object. This is why the privacy test exists and why public reads go through the
+view.
+
+================================================================================
+8. PHASE 5 — HARDENING, EVIDENCE AND DELIVERY
+================================================================================
+Weeks 9–10 · ~50 person-hours
+
+------------------------------------------------------------------------------
+8.1 Objective
+------------------------------------------------------------------------------
+
+Every claim made anywhere in the documentation is backed by a measurement, and
+the demonstration runs end to end without intervention.
+
+------------------------------------------------------------------------------
+8.2 Task Breakdown
+------------------------------------------------------------------------------
+
+  T5.1  Evaluation dataset construction                                    8h  A
+        Two hundred lost, two hundred found, sixty ground-truth pairs across
+        three difficulty tiers. Version-controlled with the code.
+        Exit: `npm run seed:eval` reproduces it exactly.
+
+  T5.2  Measure SC1 and SC2                                                5h  A
+        Recall at top-3 across the sixty pairs; precision among pairs scoring
+        80 or above. Record the numbers.
+        Exit: both measured; if either misses, tune weights against this
+        dataset and re-measure, recording each iteration.
+
+  T5.3  Measure SC3 through SC7                                            5h  A, B
+        Latency at volume, adversarial claim rejection across twenty trials,
+        audit completeness, the fifty-way concurrency test, and an external
+        review of 3NF compliance by a member who did not write the schema.
+        Exit: a results table with measured values against thresholds.
+
+  T5.4  Performance sweep                                                  5h  A
+        Every budgeted operation, ten runs, first discarded, median recorded,
+        plan captured.
+        Exit: a budget-versus-actual table; any miss investigated, not
+        explained away.
+
+  T5.5  Security review                                                    4h  B
+        Grep for string-concatenated SQL. Verify every public endpoint against
+        the private-field deny list. Confirm rate limits fire. Confirm the
+        application role holds no DDL privilege. Confirm no secret in the
+        repository history, not merely in the current tree.
+        Exit: a findings list, empty or remediated.
+
+  T5.6  Test suite completion                                              6h  All
+        Constraint tests, query tests, transaction tests, API tests, privacy
+        tests. Every endpoint with at least three. Every constraint with a
+        negative test.
+        Exit: full suite green from a clean database in one command.
+
+  T5.7  Backup and restore rehearsal                                       2h  A
+        pg_dump, restore into a scratch database, verify row counts and run
+        the consistency query.
+        Exit: a restored backup passes the same tests as the original.
+
+  T5.8  Documentation assembly                                             8h  C
+        All five documents complete and consistent. Traceability matrices
+        checked. Screenshots current. Diagrams legible when printed.
+        Exit: a reviewer can trace any requirement to its implementation.
+
+  T5.9  Demonstration script                                               4h  All
+        Written beat by beat with timings, the narrative dataset prepared, the
+        two-session concurrency demonstration scripted, fallback screenshots
+        captured for every step in case something fails live.
+        Exit: the script exists and names who speaks when.
+
+  T5.10 Rehearsal                                                          3h  All
+        Twice, end to end, on the demonstration machine, timed.
+        Exit: two clean runs without intervention.
+
+------------------------------------------------------------------------------
+8.3 Release Gate
+------------------------------------------------------------------------------
+
+  [ ] SC1 through SC7 measured, with numbers, meeting thresholds
+  [ ] Every performance budget met at target volume
+  [ ] Full test suite green from a clean database
+  [ ] Security review findings closed
+  [ ] Backup restored and verified
+  [ ] All five documents complete and mutually consistent
+  [ ] Demonstration rehearsed twice without intervention
+  [ ] Fallback screenshots exist for every demonstration step
+  [ ] Every member can answer questions on any part of the system
+
+------------------------------------------------------------------------------
+8.4 Common Failure Modes in This Phase
+------------------------------------------------------------------------------
+
+Tuning weights against a single anecdotal mismatch. Overfits to one example and
+silently degrades the general case. Tune only against the evaluation dataset and
+record each iteration.
+
+Writing documentation from memory in week ten. Every phase writes its own
+documentation section as it goes; Phase 5 assembles, it does not author.
+
+Demonstrating on data typed live. Prepare the narrative dataset and rehearse
+against it.
+
+Rehearsing on a developer machine and presenting on another. Rehearse where you
+will present.
+
+================================================================================
+9. CROSS-PHASE WORKSTREAMS
+================================================================================
+
+------------------------------------------------------------------------------
+9.1 Documentation
+------------------------------------------------------------------------------
+
+Each phase writes its own sections. Phase 1 writes the data model and
+normalisation. Phase 2 writes matching and indexing. Phase 3 writes transactions
+and concurrency. Phase 4 writes the design system and flows. Phase 5 assembles
+and checks consistency. Documentation deferred entirely to the end is
+documentation written badly.
+
+------------------------------------------------------------------------------
+9.2 Testing
+------------------------------------------------------------------------------
+
+Tests are written with the feature, not after the phase. The constraint suite
+begins in Phase 1 and grows. A phase gate cannot pass with failing tests.
+
+------------------------------------------------------------------------------
+9.3 Review
+------------------------------------------------------------------------------
+
+Every pull request is reviewed by someone outside the author's primary area.
+This is the mechanism by which all three members end up understanding the whole
+system, which is the actual requirement in a viva.
+
+------------------------------------------------------------------------------
+9.4 Decision Records
+------------------------------------------------------------------------------
+
+Any decision with a plausible alternative gets a short record: what was decided,
+what was rejected, why, and what it costs. Eight exist already in the Tech Flow
+document. Adding to them as decisions arise makes the final documentation a
+collection rather than a composition.
+
+================================================================================
+10. TASK DEPENDENCY MAP
+================================================================================
+
+  T1.1 ─► T1.6 ─► T1.7 ─► T1.9 ─► T1.10 ─► T1.11
+           ▲                │
+  T1.2 ─► T1.3 ─► T1.4 ─► T1.5                    (analysis gates the DDL)
+                                  │
+                                  ▼
+  T2.1 ─► T2.2 ─► T2.4 ─┬─► T2.9 ─► T2.10
+           │            │
+           └─► T2.3     ├─ T2.5
+                        │
+           T2.6 ─► T2.7 ─► T2.8 ─► T2.11
+                                     │
+                        T2.12 ◄──────┘
+                          │
+                          ▼
+  T3.1 ─► T3.2
+  T3.3 ─► T3.4 ─► T3.5 ─► T3.6 ─► T3.7 ─► T3.8
+                            │
+                            ▼
+                          T3.9 ─► T3.10
+  T3.11 ─► T3.12
+  T3.13
+     │
+     ▼
+  T4.1 ─► T4.2 ─► T4.3 ─┬─► T4.4
+                        ├─► T4.5 ─► T4.6
+                        ├─► T4.7
+                        ├─► T4.8
+                        ├─► T4.9 ─► T4.10
+                        └─► T4.11
+                              │
+                       T4.12 ─┴─► T4.13 ─► T4.14
+                                             │
+                                             ▼
+  T5.1 ─► T5.2 ─► T5.3 ─► T5.4
+  T5.5
+  T5.6
+  T5.7
+     │
+     ▼
+  T5.8 ─► T5.9 ─► T5.10
+
+Critical path: T1.1 → T1.7 → T2.6 → T2.8 → T2.11 → T3.6 → T3.9 → T4.8 → T5.2 →
+T5.10. Roughly 62 hours of sequential work. Anything on this path that slips
+slips the project; anything off it can absorb delay.
+
+The two riskiest items on the path are T2.6, the matching procedure, and T3.6,
+the approval transaction. Both are scheduled early within their phases for
+exactly that reason.
+
+================================================================================
+11. RISK MANAGEMENT ACROSS PHASES
+================================================================================
+
+  Risk                        Phase  Early Warning            Response
+  --------------------------  -----  -----------------------  ----------------
+  Schema change needed after   2–4   Any "we need a column"   Migration, never
+  Phase 1                            conversation             a manual edit;
+                                                              re-run full
+                                                              constraint suite
+  Matching quality below       2      Fixture pairs disagree   Fix the engine,
+  expectation                         with hand computation    not the fixtures
+  Match query too slow         2      EXPLAIN shows Seq Scan   Reconcile the
+                                      after indexing           partial index
+                                                              predicate with
+                                                              the query
+                                                              predicate exactly
+  Matches table explosion      2      Row count over 8×        Raise T_FLOOR,
+                                      lost_items               tighten the
+                                                              pre-filter
+  Concurrency defect           3      Concurrency test flakes  Never "fix" by
+                                                              retrying; find
+                                                              the missing lock
+  Interface work overruns      4      Component library not    Descope the
+                                      done by day 3 of the     ladder in
+                                      phase                    section 15
+  Documentation debt           5      A phase ends without     Block the gate;
+                                      its section written      documentation is
+                                                              a gate item
+  Member unavailable           any    Missed synchronisation   Reviews mean
+                                      two days running         every area has a
+                                                              second reader
+  Demonstration failure        5      A rehearsal needs        Fallback
+                                      intervention             screenshots for
+                                                              every step
+
+================================================================================
+12. QUALITY GATES
+================================================================================
+
+------------------------------------------------------------------------------
+12.1 Continuous Requirements
+------------------------------------------------------------------------------
+
+Main is always demonstrable. A commit that breaks main is reverted, not fixed
+forward, unless the fix is under ten minutes.
+
+All work through reviewed pull requests. Self-merging defeats the cross-review
+mechanism that makes every member able to defend the whole system.
+
+No schema change outside a migration. No exceptions, including "just for
+testing".
+
+No commit containing a secret. A pre-commit hook scanning for key patterns costs
+ten minutes to add and prevents a mistake that cannot be undone once pushed.
+
+------------------------------------------------------------------------------
+12.2 Gate Summary
+------------------------------------------------------------------------------
+
+  Gate          Week  The One Question It Answers
+  ------------  ----  ----------------------------------------------------
+  Schema        2     Is the data model correct, constrained and defensible?
+  Matching      4     Does the engine produce correct scores, fast, with
+                      reasons that sum?
+  Transaction   6     Is the system safe under concurrency, with complete
+                      history?
+  Usability     8     Can someone who has never seen this use it?
+  Release      10     Is every claim measured and the demonstration rehearsed?
+
+================================================================================
+13. DELIVERABLE INVENTORY
+================================================================================
+
+  Code
+    Migration files, sequentially numbered, forward-only
+    Seed scripts: reference, synthetic, evaluation
+    Application: API, services, repositories, SQL modules
+    Client: components, screens, design tokens
+    Test suite: constraint, query, transaction, API, privacy
+    Docker Compose for the full stack
+
+  Database artefacts
+    ER diagram, conceptual and logical
+    Data dictionary, every column with type, constraint and purpose
+    Functional dependency analysis with computed closures
+    Normalisation narrative from unnormalised to 3NF, including the matches
+      violation and its resolution
+    Referential action policy table
+    Index catalogue with justification per index
+    Query plans: before, after, and the anti-pattern
+    Query catalogue, ten annotated queries
+    Views, procedures, triggers with their rationale
+
+  Documents
+    FI-PRD-001  Product Requirements
+    FI-TRD-001  Technical Requirements
+    FI-AFL-001  Application Flow
+    FI-DFL-001  Design Flow
+    FI-TFL-001  Technical Flow
+    FI-IMP-001  Implementation Plan
+
+  Evidence
+    Success criteria results table, measured
+    Performance budget versus actual table
+    Concurrency test output, passing and the documented failing variant
+    Audit consistency query result
+    Accessibility audit results
+    Security review findings
+
+  Presentation
+    Demonstration script with timings and speaker assignment
+    Narrative dataset
+    Fallback screenshots for every demonstration step
+    Slide deck
+
+================================================================================
+14. DEMONSTRATION PLAN
+================================================================================
+
+Fifteen minutes, structured so that the database work occupies the majority of
+the time, because it occupies the majority of the marks.
+
+  0:00–1:30   The problem, in concrete terms
+              Two reports, two channels, never meeting. State the project
+              statement verbatim. No slides beyond one.
+
+  1:30–4:00   The data model
+              ER diagram. Walk the relationships. Then the normalisation: the
+              unnormalised relation, the location transitive dependency, the
+              decomposition. Then the matches score→band violation, the three
+              candidate responses, and the one chosen. This is the strongest
+              two minutes available and it is placed early.
+
+  4:00–7:00   Matching, live
+              File a lost report. Show it returns no matches and the
+              standing-query message. File the corresponding found report from
+              a second browser. Return to the first, refresh, show the 98.
+              Open the reason breakdown and add the numbers aloud.
+              Then drop to psql and show the same match row, its reason_json,
+              and the procedure that produced it.
+
+  7:00–10:00  Transactions, live
+              Two psql sessions side by side. Session 1 takes the lock.
+              Session 2 blocks visibly. Session 1 commits. Session 2 unblocks
+              and fails with ITEM_NOT_AVAILABLE.
+              Then the same sequence with FOR UPDATE removed, producing two
+              approved claims. Then show the partial unique index catching it
+              anyway.
+
+  10:00–12:00 Indexing
+              EXPLAIN ANALYZE before: 313 ms, 9,958 rows removed by filter.
+              Create the index. After: 29 ms, 47 buffers. Then the
+              wrong-column-order index that the planner declines, and why.
+
+  12:00–13:30 Audit and analytics
+              The timeline for the item just returned. Then the hotspot view
+              with its window functions, and the point that the divergence
+              between lost and found locations is the actionable output.
+
+  13:30–15:00 Questions
+
+  Preparation
+    Narrative dataset loaded and verified the morning of.
+    Both browsers signed in as the two personas, on separate profiles.
+    Two psql sessions open with the commands in scrollback.
+    Screenshots of every step, in order, on a second device.
+    A rehearsed answer to "why no AI?" — because attribute matching is
+    sufficient for commodity objects, is explainable line by line, and the
+    project's purpose is to demonstrate the database rather than to hide it
+    behind a model.
+
+================================================================================
+15. CONTINGENCY AND DESCOPING LADDER
+================================================================================
+
+------------------------------------------------------------------------------
+15.1 The Ladder
+------------------------------------------------------------------------------
+
+If time runs short, descope in this order. Each rung is chosen because it
+removes work without removing evidence.
+
+  1.  Analytics dashboard interface. Keep the views; demonstrate them in psql.
+      Costs a screen, keeps every window function and aggregate.
+  2.  Staff console screens. Keep the endpoints and the staff verification
+      routing. Demonstrate via API.
+  3.  Browse filters beyond category and date.
+  4.  Full-text description matching. Fall back to the manual token
+      intersection, or drop the component and rescale the rubric to 90.
+  5.  Expiry job. Document the design; do not build it.
+  6.  Match dismissal.
+  7.  Editing reports after creation.
+
+------------------------------------------------------------------------------
+15.2 Never Descope
+------------------------------------------------------------------------------
+
+  The normalisation analysis. It is Module 2 in its entirety.
+  The matching engine and its reason breakdown. It is the product.
+  The approval transaction and its concurrency test. It is Module 4 in its
+    entirety, and it is the single best piece of evidence the project has.
+  The audit trail. It is the integrity story and the temporal-database angle.
+  The index evidence. It is Module 3, and it takes one afternoon.
+  The constraint suite. It is what makes every claim about integrity
+    verifiable rather than asserted.
+
+------------------------------------------------------------------------------
+15.3 If a Phase Slips
+------------------------------------------------------------------------------
+
+Phase 1 slipping is the most dangerous case, because everything depends on it.
+Response: extend Phase 1 by up to three days and take the time from Phase 4,
+descending the ladder as needed. A correct schema delivered late beats a rushed
+schema delivered on time, because a rushed schema costs more in Phases 2 and 3
+than it saves in Phase 1.
+
+Phase 2 slipping: take time from Phase 4. The interface can be plain.
+
+Phase 3 slipping: do not take time from testing. Take it from Phase 4 and
+descope aggressively. The concurrency evidence is worth more than any screen.
+
+Phase 4 slipping: descend the ladder. The API-level demonstration is acceptable
+for anything below rung 2.
+
+Phase 5 slipping: it cannot. Phase 5 is measurement and rehearsal, and a project
+that skips those arrives at its review with untested claims and an unrehearsed
+demonstration. If Phase 5 is under pressure, the correct response is to have
+descoped earlier.
+
+================================================================================
+END OF DOCUMENT — FI-IMP-001 v1.1
+================================================================================

@@ -1,0 +1,2617 @@
+================================================================================
+FOUNDIT — SMART CAMPUS LOST & FOUND
+TECHNICAL REQUIREMENTS DOCUMENT (TRD)
+================================================================================
+
+Document ID .............. FI-TRD-001
+Version .................. 1.1
+Status ................... Baselined for Implementation
+Date ..................... 18 September 2026
+Author ................... Aadit Garg (25BCE2315)
+Programme ................ B.Tech Computer Science & Engineering, VIT Vellore
+Course Context ........... Database Management Systems — Project Component
+Supersedes ............... None
+Depends On ............... FI-PRD-001 v1.0
+
+================================================================================
+TABLE OF CONTENTS
+================================================================================
+
+1.  Purpose, Scope and Conventions
+2.  Technology Stack and Justification
+3.  System Architecture
+4.  Conceptual Data Model — Entities and Relationships
+5.  Logical Schema — Relation by Relation
+6.  Functional Dependencies and Normalisation
+7.  Referential Integrity Policy
+8.  Physical Design — Indexing Strategy
+9.  The Matching Engine — Technical Specification
+10. Transaction Design and Concurrency Control
+11. Views, Stored Procedures and Triggers
+12. Query Catalogue
+13. API Specification
+14. Security Implementation
+15. Performance Engineering
+16. Testing Strategy
+17. Deployment, Migration and Operations
+18. Technical Risks and Mitigations
+19. Appendices
+
+================================================================================
+1. PURPOSE, SCOPE AND CONVENTIONS
+================================================================================
+
+------------------------------------------------------------------------------
+1.1 Purpose
+------------------------------------------------------------------------------
+
+The Product Requirements Document states what FoundIt must do. This document
+states how it will be built. Where the PRD says "the system shall compute a
+match score", this document gives the expression, the columns it reads, the
+index it uses, and the execution plan it should produce.
+
+The document is written to be sufficient. A competent developer who has read the
+PRD and this document should be able to build FoundIt without asking further
+design questions. Where a decision is deliberately left open, it is marked as
+such and assigned an owner.
+
+------------------------------------------------------------------------------
+1.2 Scope
+------------------------------------------------------------------------------
+
+In scope: data model, schema DDL, normalisation analysis, index design, the
+matching algorithm's SQL realisation, transaction boundaries and isolation
+requirements, API surface, security controls, test strategy, and deployment
+procedure.
+
+Out of scope: visual design and interaction detail, which belong to the Design
+Flow document; sequencing and effort estimation, which belong to the
+Implementation Plan; end-user documentation.
+
+------------------------------------------------------------------------------
+1.3 Conventions
+------------------------------------------------------------------------------
+
+SQL keywords appear in upper case. Identifiers appear in lower snake case.
+Table names are plural nouns; column names are singular. Primary keys are named
+after the entity in singular followed by _id, which makes join conditions
+readable and makes the USING clause available where names align.
+
+Timestamps are stored with time zone and are always UTC at rest; conversion to
+Asia/Kolkata happens at the presentation layer only. Dates without a time
+component use the DATE type.
+
+Enumerated values are upper case with underscores. Boolean columns are named as
+positive assertions prefixed with is_ or has_, never negated, because a column
+named is_not_active produces double negatives in every predicate that reads it.
+
+The reference database engine is PostgreSQL 15. Where a construct has no MySQL
+equivalent, the MySQL fallback is stated inline.
+
+Requirement identifiers from the PRD are cited in the form (FR-5.3) so that
+traceability is direct.
+
+================================================================================
+2. TECHNOLOGY STACK AND JUSTIFICATION
+================================================================================
+
+------------------------------------------------------------------------------
+2.1 Selected Stack
+------------------------------------------------------------------------------
+
+  Layer              Selection                    Version
+  -----------------  ---------------------------  -----------------
+  Database           PostgreSQL                   15.x
+  Application        Node.js with Express         Node 20 LTS
+  DB driver          node-postgres (pg)           8.x
+  Migrations         node-pg-migrate              6.x
+  Authentication     bcrypt + JSON Web Tokens     —
+  Frontend           React with Vite              React 18
+  HTTP client        fetch API                    native
+  Styling            Plain CSS with custom props  —
+  Testing            Jest + Supertest             29.x
+  API documentation  OpenAPI 3.1                  —
+
+An acceptable substitution, if the team's existing familiarity favours it, is
+Python with FastAPI and psycopg in place of Node and Express, or Java with
+Spring Boot and JDBC. The substitution does not affect any section of this
+document other than section 13's sample code, because every design decision that
+matters lives in the database.
+
+------------------------------------------------------------------------------
+2.2 Why PostgreSQL
+------------------------------------------------------------------------------
+
+The database choice is the only technology choice that materially affects this
+project, because the project is a database project. PostgreSQL is selected for
+seven specific capabilities that FoundIt uses.
+
+Partial indexes. Business rule BR-2 — at most one approved claim per found item
+— is expressible as a single partial unique index. In MySQL the same rule
+requires a trigger or a generated column with a nullable discriminator, both of
+which are clumsier and harder to defend.
+
+Native enumerated types. Statuses become domain-constrained at the type level
+rather than through CHECK clauses, which produces clearer error messages and
+better self-documentation when the schema is inspected.
+
+Common table expressions and window functions. The analytics in PRD section 14
+use both. MySQL 8 has them; MySQL 5.7 does not, and the risk of a team member
+installing 5.7 is real.
+
+Full-text search with tsvector and GIN indexing. The description-overlap
+component of the match score and the keyword search in browse both benefit,
+without introducing a separate search service.
+
+Transactional DDL. Migrations either apply completely or not at all, which
+removes an entire class of half-migrated-database problems during development.
+
+Row-level locking with SELECT ... FOR UPDATE and the NOWAIT and SKIP LOCKED
+modifiers. The claim approval transaction depends on this.
+
+EXPLAIN (ANALYZE, BUFFERS). The index design exercise in section 8 and the
+performance evidence in section 15 require a query planner that reports actual
+timings and buffer access, which PostgreSQL does in more detail than the
+alternatives.
+
+------------------------------------------------------------------------------
+2.3 What Is Deliberately Not Used
+------------------------------------------------------------------------------
+
+No object-relational mapper. An ORM would hide exactly the thing the project
+exists to demonstrate. All database access is through hand-written parameterised
+SQL held in a query module, one file per aggregate. This is a pedagogical
+decision first and a performance decision second, but it is also defensible on
+engineering grounds: the matching query is not expressible idiomatically in any
+ORM and would end up as raw SQL regardless.
+
+No caching layer. At the projected data volumes, correct indexes make caching
+unnecessary, and a cache would introduce invalidation complexity that teaches
+nothing relevant.
+
+No message queue. Match generation runs synchronously inside the report-creation
+transaction. At 200 milliseconds this is acceptable, and synchronous execution
+means a user never sees a report without its matches, which removes an entire
+category of "why is my list empty" support questions.
+
+No search engine. PostgreSQL full-text search is sufficient for a corpus of
+short descriptions.
+
+No container orchestration. A single Docker Compose file defining the database
+and the application is the deployment unit.
+
+================================================================================
+3. SYSTEM ARCHITECTURE
+================================================================================
+
+------------------------------------------------------------------------------
+3.1 Layering
+------------------------------------------------------------------------------
+
+Four layers, each with a single responsibility and a defined dependency
+direction. Dependencies point downward only.
+
+  +---------------------------------------------------------------+
+  |  PRESENTATION LAYER  — React SPA                              |
+  |  Routing, forms, rendering, client-side validation for UX     |
+  |  Holds no business rules. Trusts nothing it computes.         |
+  +---------------------------------------------------------------+
+                              | HTTPS / JSON
+                              v
+  +---------------------------------------------------------------+
+  |  API LAYER  — Express routers and controllers                 |
+  |  Request parsing, authentication, authorisation, input        |
+  |  validation, response shaping, HTTP status selection          |
+  +---------------------------------------------------------------+
+                              | function calls
+                              v
+  +---------------------------------------------------------------+
+  |  SERVICE LAYER  — domain services                             |
+  |  Transaction boundaries, orchestration across repositories,   |
+  |  state machine enforcement, business rule checks that span    |
+  |  more than one relation                                       |
+  +---------------------------------------------------------------+
+                              | parameterised SQL
+                              v
+  +---------------------------------------------------------------+
+  |  DATA LAYER  — PostgreSQL                                     |
+  |  Relations, constraints, indexes, views, procedures,          |
+  |  triggers, transactions, the matching computation             |
+  +---------------------------------------------------------------+
+
+The rule that makes this architecture worth drawing is that the data layer is
+authoritative. Any rule expressible as a constraint is declared as a constraint,
+and the service layer's equivalent check exists only to produce a friendly error
+message before the constraint fires. If the service layer is bypassed entirely —
+by a psql session, by a future mobile client, by a badly written admin script —
+the database still refuses to accept invalid data.
+
+------------------------------------------------------------------------------
+3.2 Component Inventory
+------------------------------------------------------------------------------
+
+  Component            Responsibility
+  -------------------  --------------------------------------------------
+  auth.controller      Registration, login, session issue and refresh
+  auth.service         Password hashing, token signing, role resolution
+  items.controller     Lost and found report CRUD endpoints
+  items.service        Report creation, state transitions, match trigger
+  match.service        Score computation invocation, persistence, banding
+  claims.controller    Claim creation, verification, completion endpoints
+  claims.service       The approval transaction; the critical section
+  audit.service        Audit row construction; called inside every txn
+  reference.controller Reference data read endpoints and admin CRUD
+  analytics.controller Read-only aggregate endpoints backed by views
+  db/pool              Connection pool, transaction helper
+  db/queries/*.sql     All SQL, one file per aggregate, loaded at boot
+
+------------------------------------------------------------------------------
+3.3 Deployment Topology
+------------------------------------------------------------------------------
+
+Development: application and database on the developer's machine, database in
+Docker, application run directly by Node for fast reload.
+
+Demonstration: a single host running Docker Compose with two services. The
+database volume is a named volume so that seeded data survives restarts, which
+matters because re-seeding before a viva is a risk nobody needs.
+
+The application connects to the database over a private network with a
+non-superuser role. The superuser role is used only by migrations.
+
+================================================================================
+4. CONCEPTUAL DATA MODEL — ENTITIES AND RELATIONSHIPS
+================================================================================
+
+------------------------------------------------------------------------------
+4.1 Entity-Relationship Narrative
+------------------------------------------------------------------------------
+
+USERS is the actor entity. Every report and every claim originates from a user,
+and every audit entry names one.
+
+LOST_ITEMS and FOUND_ITEMS are the two fact entities. They are structurally
+parallel but are kept as separate relations rather than unified into a single
+ITEMS relation with a type discriminator. This decision is examined in 4.3.
+
+MATCHES is an associative entity resolving the many-to-many relationship between
+lost items and found items. It is not a pure junction table because it carries
+its own attributes — score, reasons, band, status — which makes it an
+associative entity in the strict sense and a good example of one.
+
+CLAIMS is dependent on MATCHES. A claim cannot exist without a match, because
+the match is what establishes which lost item and which found item are in
+question. This is a one-to-many relationship: one match may accumulate several
+claims over time, of which at most one is ever approved.
+
+LOCATIONS, CATEGORIES, COLOURS and BRANDS are reference entities. Each
+participates in a one-to-many relationship with both item relations.
+
+AUDIT_LOG is a polymorphic dependent entity. It references an entity by type and
+identifier rather than by typed foreign key, which is discussed in 5.10.
+
+MATCH_CONFIG is a singleton-ish configuration entity with no relationships.
+
+------------------------------------------------------------------------------
+4.2 Relationship Cardinalities
+------------------------------------------------------------------------------
+
+  Parent          Child           Card.    Participation   Notes
+  --------------  --------------  -------  --------------  -------------------
+  USERS           LOST_ITEMS      1:N      Optional        A user need not lose
+  USERS           FOUND_ITEMS     1:N      Optional        A user need not find
+  USERS           CLAIMS          1:N      Optional        as claimant
+  USERS           CLAIMS          1:N      Optional        as verifier
+  USERS           AUDIT_LOG       1:N      Optional        as actor
+  LOCATIONS       LOST_ITEMS      1:N      Mandatory child Every item has one
+  LOCATIONS       FOUND_ITEMS     1:N      Mandatory child
+  CATEGORIES      LOST_ITEMS      1:N      Mandatory child
+  CATEGORIES      FOUND_ITEMS     1:N      Mandatory child
+  COLOURS         LOST_ITEMS      1:N      Optional child
+  BRANDS          LOST_ITEMS      1:N      Optional child
+  LOST_ITEMS      MATCHES         1:N      Optional
+  FOUND_ITEMS     MATCHES         1:N      Optional
+  MATCHES         CLAIMS          1:N      Optional
+  CATEGORIES      CATEGORIES      1:N      Optional        self-reference
+
+The USERS-to-CLAIMS relationship appearing twice, once as claimant and once as
+verifier, is a two-role relationship between the same pair of entities. It
+requires two distinct foreign keys with distinct names and is a worthwhile
+example to raise in a viva, because students frequently model it incorrectly as
+a single reference.
+
+The CATEGORIES self-reference implements the optional hierarchy and is the
+project's example of a recursive relationship.
+
+------------------------------------------------------------------------------
+4.3 Design Decision — Two Item Tables Rather Than One
+------------------------------------------------------------------------------
+
+The alternative design is a single ITEMS relation with a column report_type
+taking values LOST or FOUND. It has genuine merits and the decision to reject it
+should be a considered one.
+
+Arguments for unification: the two relations share roughly eighty percent of
+their columns; a single relation halves the DDL; a single relation makes a
+"search everything" query trivial; adding a third report type later requires no
+new table.
+
+Arguments for separation, which prevail here:
+
+Different mandatory attributes. FOUND_ITEMS requires a custody declaration and
+carries a private distinguishing feature; LOST_ITEMS has neither. In a unified
+relation both columns must be nullable, and the rule "custody is mandatory when
+report_type is FOUND" becomes a CHECK constraint with a conditional, which is
+weaker than NOT NULL and is easy to write incorrectly.
+
+Different status domains. A lost item is OPEN, MATCHED, RESOLVED, CLOSED_BY_USER
+or EXPIRED. A found item is AVAILABLE, CLAIMED, RETURNED or DISPOSED. A unified
+relation needs a union of both domains, and nothing in the schema prevents a
+lost item from being set to DISPOSED.
+
+Foreign key clarity. MATCHES needs to reference one lost item and one found
+item. With separated relations, two foreign keys to two tables express this
+exactly, and the database enforces it. With a unified relation, both foreign
+keys point at the same table and nothing prevents a match row pairing two lost
+items. That rule would need a trigger.
+
+Query clarity. The matching query joins LOST_ITEMS to FOUND_ITEMS. Written
+against a unified relation it becomes a self-join with two report_type
+predicates, which is harder to read and gives the planner less to work with.
+
+Index selectivity. Separate tables give separate, smaller indexes. A unified
+table's status index carries values from both domains, reducing selectivity.
+
+The cost of separation is duplication of shared column definitions and of the
+reporting logic that reads both. The duplication is managed by a shared DDL
+fragment in the migration and by a view, item_reports_unified, that presents the
+union for the small number of queries that genuinely need both.
+
+================================================================================
+5. LOGICAL SCHEMA — RELATION BY RELATION
+================================================================================
+
+------------------------------------------------------------------------------
+5.0 Enumerated Types
+------------------------------------------------------------------------------
+
+CREATE TYPE user_role AS ENUM ('STUDENT', 'STAFF', 'ADMIN');
+
+CREATE TYPE lost_status AS ENUM (
+    'OPEN', 'MATCHED', 'RESOLVED', 'CLOSED_BY_USER', 'EXPIRED');
+
+CREATE TYPE found_status AS ENUM (
+    'AVAILABLE', 'CLAIMED', 'RETURNED', 'DISPOSED');
+
+CREATE TYPE match_status AS ENUM (
+    'SUGGESTED', 'CLAIMED', 'CONFIRMED', 'REJECTED_BY_USER', 'INVALIDATED');
+
+CREATE TYPE match_band AS ENUM ('STRONG', 'POSSIBLE', 'WEAK');
+
+CREATE TYPE claim_status AS ENUM (
+    'PENDING', 'APPROVED', 'REJECTED', 'WITHDRAWN', 'COMPLETED', 'REVERSED');
+
+CREATE TYPE custody_type AS ENUM ('WITH_FINDER', 'DEPOSITED_SECURITY',
+    'DEPOSITED_DEPARTMENT', 'DEPOSITED_HOSTEL');
+
+CREATE TYPE audit_entity AS ENUM ('LOST_ITEM', 'FOUND_ITEM', 'MATCH',
+    'CLAIM', 'USER');
+
+MySQL fallback: replace each with a VARCHAR column carrying a CHECK constraint
+enumerating the same values. The behaviour is equivalent; the error messages are
+less informative.
+
+------------------------------------------------------------------------------
+5.1 users
+------------------------------------------------------------------------------
+
+CREATE TABLE users (
+    user_id         SERIAL PRIMARY KEY,
+    full_name       VARCHAR(120)  NOT NULL,
+    email           VARCHAR(160)  NOT NULL,
+    password_hash   CHAR(60)      NOT NULL,
+    phone           VARCHAR(20),
+    department      VARCHAR(100),
+    role            user_role     NOT NULL DEFAULT 'STUDENT',
+    is_active       BOOLEAN       NOT NULL DEFAULT TRUE,
+    flagged_count   SMALLINT      NOT NULL DEFAULT 0,
+    created_at      TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT uq_users_email UNIQUE (email),
+    CONSTRAINT ck_users_email_format
+        CHECK (email ~* '^[A-Za-z0-9._%%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$'),
+    CONSTRAINT ck_users_name_nonblank
+        CHECK (length(trim(full_name)) > 0),
+    CONSTRAINT ck_users_flagged_nonneg
+        CHECK (flagged_count >= 0)
+);
+
+Notes. The UNIQUE constraint on email is the enforcement point for FR-1.2 and is
+what makes concurrent duplicate registration impossible; the application check
+is a courtesy. password_hash is fixed at 60 characters because bcrypt output is
+exactly that length, and a fixed-width type documents the expectation. The email
+format CHECK is deliberately permissive — it rejects obvious garbage without
+attempting to implement RFC 5322, which is not a job for a regular expression.
+
+Emails are stored case-preserved but compared case-insensitively; the unique
+index is created on lower(email) rather than on the raw column, which is stated
+in section 8.
+
+------------------------------------------------------------------------------
+5.2 locations
+------------------------------------------------------------------------------
+
+CREATE TABLE locations (
+    location_id     SERIAL PRIMARY KEY,
+    location_name   VARCHAR(120) NOT NULL,
+    building        VARCHAR(80)  NOT NULL,
+    floor           VARCHAR(20),
+    zone            VARCHAR(40),
+    is_active       BOOLEAN      NOT NULL DEFAULT TRUE,
+    created_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT uq_locations_name_building UNIQUE (location_name, building)
+);
+
+Notes. The composite unique constraint permits "Reading Hall" to exist in two
+buildings while preventing an exact duplicate. zone supports a coarser rollup
+(Academic, Residential, Sports, Transit) used by analytics. is_active permits
+retirement without deletion, which is required because ON DELETE RESTRICT will
+refuse deletion of any location in use.
+
+Seed volume is expected to be sixty to ninety rows.
+
+------------------------------------------------------------------------------
+5.3 categories
+------------------------------------------------------------------------------
+
+CREATE TABLE categories (
+    category_id       SERIAL PRIMARY KEY,
+    category_name     VARCHAR(80) NOT NULL,
+    parent_id         INTEGER,
+    requires_staff    BOOLEAN NOT NULL DEFAULT FALSE,
+    is_sensitive      BOOLEAN NOT NULL DEFAULT FALSE,
+    is_active         BOOLEAN NOT NULL DEFAULT TRUE,
+
+    CONSTRAINT uq_categories_name UNIQUE (category_name),
+    CONSTRAINT fk_categories_parent
+        FOREIGN KEY (parent_id) REFERENCES categories(category_id)
+        ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT ck_categories_no_self_parent
+        CHECK (parent_id IS NULL OR parent_id <> category_id)
+);
+
+Notes. requires_staff drives the verification routing of BR-13. is_sensitive
+drives the public-listing suppression described in PRD 6.4. The self-parent
+CHECK prevents the trivial cycle; longer cycles are prevented by the seed script
+and by an admin-side validation, since a general cycle check requires a
+recursive query and is disproportionate here.
+
+Seed categories: Electronics, Earphones/Headphones, Mobile Phone, Laptop,
+Charger/Cable, Calculator, Books/Notes, Stationery, Bag/Backpack, Wallet/Purse,
+Identity Document, Keys, Water Bottle, Clothing, Umbrella, Spectacles, Jewellery,
+Sports Equipment, Lab Equipment, Other. Identity Document, Laptop, Mobile Phone,
+and Jewellery must be seeded with requires_staff = TRUE.
+
+------------------------------------------------------------------------------
+5.4 colours and brands
+------------------------------------------------------------------------------
+
+CREATE TABLE colours (
+    colour_id    SERIAL PRIMARY KEY,
+    colour_name  VARCHAR(40) NOT NULL,
+    hex_value    CHAR(7),
+    is_active    BOOLEAN NOT NULL DEFAULT TRUE,
+    CONSTRAINT uq_colours_name UNIQUE (colour_name),
+    CONSTRAINT ck_colours_hex CHECK (hex_value IS NULL
+        OR hex_value ~ '^#[0-9A-Fa-f]{6}$')
+);
+
+CREATE TABLE brands (
+    brand_id    SERIAL PRIMARY KEY,
+    brand_name  VARCHAR(80) NOT NULL,
+    is_active   BOOLEAN NOT NULL DEFAULT TRUE,
+    CONSTRAINT uq_brands_name UNIQUE (brand_name)
+);
+
+Notes. hex_value exists purely to render a colour swatch in the interface, which
+materially improves scan speed in a list view. Brands are seeded with about
+forty common values and extended by admin; an "Other/Unknown" row exists and is
+referenced when the user supplies free text, which is then captured in the item
+relation's brand_other column.
+
+------------------------------------------------------------------------------
+5.5 lost_items
+------------------------------------------------------------------------------
+
+CREATE TABLE lost_items (
+    lost_id          SERIAL PRIMARY KEY,
+    user_id          INTEGER      NOT NULL,
+    item_name        VARCHAR(120) NOT NULL,
+    category_id      INTEGER      NOT NULL,
+    location_id      INTEGER      NOT NULL,
+    colour_id        INTEGER,
+    brand_id         INTEGER,
+    brand_other      VARCHAR(80),
+    description      TEXT,
+    lost_date        DATE         NOT NULL,
+    lost_time_from   TIME,
+    lost_time_to     TIME,
+    status           lost_status  NOT NULL DEFAULT 'OPEN',
+    resolved_at      TIMESTAMPTZ,
+    created_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT fk_lost_user     FOREIGN KEY (user_id)
+        REFERENCES users(user_id)      ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT fk_lost_category FOREIGN KEY (category_id)
+        REFERENCES categories(category_id) ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT fk_lost_location FOREIGN KEY (location_id)
+        REFERENCES locations(location_id)  ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT fk_lost_colour   FOREIGN KEY (colour_id)
+        REFERENCES colours(colour_id)      ON DELETE SET NULL ON UPDATE CASCADE,
+    CONSTRAINT fk_lost_brand    FOREIGN KEY (brand_id)
+        REFERENCES brands(brand_id)        ON DELETE SET NULL ON UPDATE CASCADE,
+
+    CONSTRAINT ck_lost_date_not_future  CHECK (lost_date <= CURRENT_DATE),
+    CONSTRAINT ck_lost_time_order
+        CHECK (lost_time_from IS NULL OR lost_time_to IS NULL
+               OR lost_time_from <= lost_time_to),
+    CONSTRAINT ck_lost_name_nonblank    CHECK (length(trim(item_name)) > 0),
+    CONSTRAINT ck_lost_resolved_consistent
+        CHECK ((status = 'RESOLVED') = (resolved_at IS NOT NULL))
+);
+
+Notes. The last CHECK is worth highlighting: it enforces a biconditional between
+a status value and the presence of a timestamp, which prevents the common defect
+of a resolved row with no resolution time or an unresolved row carrying a stale
+one. This is the kind of constraint that distinguishes a considered schema from
+a generated one.
+
+ck_lost_date_not_future uses CURRENT_DATE, which PostgreSQL permits in a CHECK
+even though it is not strictly immutable; the constraint is evaluated at write
+time, which is the intent. If the engine refuses, the equivalent is a BEFORE
+INSERT trigger, and that fallback is noted here rather than discovered later.
+
+------------------------------------------------------------------------------
+5.6 found_items
+------------------------------------------------------------------------------
+
+CREATE TABLE found_items (
+    found_id             SERIAL PRIMARY KEY,
+    user_id              INTEGER,
+    finder_note          VARCHAR(160),
+    item_name            VARCHAR(120)  NOT NULL,
+    category_id          INTEGER       NOT NULL,
+    location_id          INTEGER       NOT NULL,
+    colour_id            INTEGER,
+    brand_id             INTEGER,
+    brand_other          VARCHAR(80),
+    description          TEXT,
+    private_feature      TEXT          NOT NULL,
+    custody              custody_type  NOT NULL,
+    is_high_value        BOOLEAN       NOT NULL DEFAULT FALSE,
+    storage_location     VARCHAR(160),
+    found_date           DATE          NOT NULL,
+    found_time           TIME,
+    status               found_status  NOT NULL DEFAULT 'AVAILABLE',
+    returned_at          TIMESTAMPTZ,
+    created_at           TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+    updated_at           TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT fk_found_user     FOREIGN KEY (user_id)
+        REFERENCES users(user_id)      ON DELETE SET NULL ON UPDATE CASCADE,
+    CONSTRAINT fk_found_category FOREIGN KEY (category_id)
+        REFERENCES categories(category_id) ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT fk_found_location FOREIGN KEY (location_id)
+        REFERENCES locations(location_id)  ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT fk_found_colour   FOREIGN KEY (colour_id)
+        REFERENCES colours(colour_id)      ON DELETE SET NULL ON UPDATE CASCADE,
+    CONSTRAINT fk_found_brand    FOREIGN KEY (brand_id)
+        REFERENCES brands(brand_id)        ON DELETE SET NULL ON UPDATE CASCADE,
+
+    CONSTRAINT ck_found_date_not_future CHECK (found_date <= CURRENT_DATE),
+    CONSTRAINT ck_found_identity CHECK (user_id IS NOT NULL
+                                        OR finder_note IS NOT NULL),
+    CONSTRAINT ck_found_storage CHECK (custody = 'WITH_FINDER'
+                                       OR storage_location IS NOT NULL),
+    CONSTRAINT ck_found_private_nonblank
+        CHECK (length(trim(private_feature)) > 0),
+    CONSTRAINT ck_found_returned_consistent
+        CHECK ((status = 'RETURNED') = (returned_at IS NOT NULL))
+);
+
+Notes. user_id is nullable here and not in lost_items, which resolves open
+question OQ-1 in favour of permitting staff-recorded anonymous finds. The
+ck_found_identity constraint ensures that an anonymous find still records
+something about its provenance. ck_found_storage is a conditional mandatory
+rule: a storage location is required precisely when the item is not with the
+finder, which is exactly the kind of rule that a unified item table could not
+express cleanly.
+
+private_feature is NOT NULL. Making it mandatory is a product decision with a
+technical consequence: without it the claim verification workflow has nothing to
+verify against, so the schema refuses to accept a found report that would be
+unverifiable.
+
+Verification routing uses `categories.requires_staff OR found_items.is_high_value`.
+No monetary value is stored anywhere in the schema, by design, per PRD principle P4.
+
+------------------------------------------------------------------------------
+5.7 matches
+------------------------------------------------------------------------------
+
+CREATE TABLE matches (
+    match_id       SERIAL PRIMARY KEY,
+    lost_id        INTEGER      NOT NULL,
+    found_id       INTEGER      NOT NULL,
+    match_score    SMALLINT     NOT NULL,
+    match_band     match_band   NOT NULL,
+    reason_json    JSONB        NOT NULL,
+    status         match_status NOT NULL DEFAULT 'SUGGESTED',
+    created_at     TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_at     TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT fk_match_lost  FOREIGN KEY (lost_id)
+        REFERENCES lost_items(lost_id)   ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT fk_match_found FOREIGN KEY (found_id)
+        REFERENCES found_items(found_id) ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT uq_match_pair UNIQUE (lost_id, found_id),
+    CONSTRAINT ck_match_score_range CHECK (match_score BETWEEN 0 AND 100),
+    CONSTRAINT ck_match_band_consistent CHECK (
+        (match_band = 'STRONG'   AND match_score >= 80) OR
+        (match_band = 'POSSIBLE' AND match_score BETWEEN 60 AND 79) OR
+        (match_band = 'WEAK'     AND match_score <  60)
+    )
+);
+
+Notes. uq_match_pair is the enforcement point for FR-5.4 and is what makes the
+match-generation procedure safely idempotent through ON CONFLICT DO UPDATE.
+
+ck_match_band_consistent enforces agreement between two columns that could
+otherwise drift. Storing the band as a column rather than computing it on read
+is a deliberate denormalisation for query efficiency — band is filtered and
+grouped constantly — and the CHECK is the price paid to keep the denormalisation
+honest. This trade-off is worth articulating in a viva, because it is a real
+example of controlled denormalisation rather than an accident.
+
+reason_json stores the itemised breakdown. Its structure is fixed:
+
+  {"components": [
+     {"code": "CATEGORY", "label": "Same category (Electronics)", "points": 20},
+     {"code": "BRAND",    "label": "Same brand (Apple)",          "points": 20},
+     ...],
+   "total": 98,
+   "weights_version": 3}
+
+weights_version records which configuration generated the score, so that a later
+weight change does not make historical scores inexplicable.
+
+ON DELETE CASCADE is chosen here, in contrast to RESTRICT elsewhere, because a
+match has no independent meaning once either side is gone. Matches are derived
+data and are safely regenerable.
+
+------------------------------------------------------------------------------
+5.8 claims
+------------------------------------------------------------------------------
+
+CREATE TABLE claims (
+    claim_id           SERIAL PRIMARY KEY,
+    match_id           INTEGER      NOT NULL,
+    claimant_id        INTEGER      NOT NULL,
+    proof_text         TEXT         NOT NULL,
+    status             claim_status NOT NULL DEFAULT 'PENDING',
+    verifier_id        INTEGER,
+    decision_note      VARCHAR(300),
+    claimed_at         TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    decided_at         TIMESTAMPTZ,
+    completed_at       TIMESTAMPTZ,
+
+    CONSTRAINT fk_claim_match    FOREIGN KEY (match_id)
+        REFERENCES matches(match_id) ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT fk_claim_claimant FOREIGN KEY (claimant_id)
+        REFERENCES users(user_id)    ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT fk_claim_verifier FOREIGN KEY (verifier_id)
+        REFERENCES users(user_id)    ON DELETE SET NULL ON UPDATE CASCADE,
+
+    CONSTRAINT ck_claim_proof_nonblank CHECK (length(trim(proof_text)) >= 10),
+    CONSTRAINT ck_claim_decision_consistent CHECK (
+        (status IN ('PENDING','WITHDRAWN')) = (decided_at IS NULL)),
+    CONSTRAINT ck_claim_completed_consistent CHECK (
+        (status = 'COMPLETED') = (completed_at IS NOT NULL)),
+    CONSTRAINT ck_claim_self_verify CHECK (verifier_id IS NULL
+                                           OR verifier_id <> claimant_id)
+);
+
+Notes. ck_claim_proof_nonblank requires at least ten characters, which blocks
+the "mine" one-word claim without being burdensome.
+
+ck_claim_self_verify is a cross-column CHECK preventing a user from verifying
+their own claim. The related rule BR-1 — a user may not claim an item they
+themselves found — spans tables and therefore cannot be a CHECK; it is enforced
+by a trigger, given in section 11.
+
+The partial unique index enforcing BR-2 is given in section 8 rather than here,
+because it is an index rather than a table constraint. This placement is itself
+instructive: in PostgreSQL, a uniqueness rule that applies to a subset of rows is
+expressible only as a partial index, not as a table constraint.
+
+------------------------------------------------------------------------------
+5.9 match_config
+------------------------------------------------------------------------------
+
+CREATE TABLE match_config (
+    config_key    VARCHAR(60) PRIMARY KEY,
+    config_value  INTEGER NOT NULL,
+    description   VARCHAR(200) NOT NULL,
+    version       INTEGER NOT NULL DEFAULT 1,
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+Seeded keys: W_CATEGORY 20, W_BRAND 20, W_LOCATION 20, W_COLOUR 15, W_DATE_MAX
+15, W_DESC_MAX 10, T_STRONG 80, T_POSSIBLE 60, T_FLOOR 40, DATE_WINDOW_DAYS 30,
+RETENTION_DAYS 90, MAX_PENDING_CLAIMS 3.
+
+------------------------------------------------------------------------------
+5.10 audit_log
+------------------------------------------------------------------------------
+
+CREATE TABLE audit_log (
+    audit_id      BIGSERIAL PRIMARY KEY,
+    entity_type   audit_entity NOT NULL,
+    entity_id     INTEGER      NOT NULL,
+    action        VARCHAR(40)  NOT NULL,
+    old_status    VARCHAR(30),
+    new_status    VARCHAR(30),
+    changed_by    INTEGER,
+    detail        VARCHAR(400),
+    changed_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT fk_audit_user FOREIGN KEY (changed_by)
+        REFERENCES users(user_id) ON DELETE SET NULL ON UPDATE CASCADE,
+    CONSTRAINT ck_audit_action_known CHECK (action IN
+        ('CREATED','UPDATED','STATUS_CHANGED','MATCHED','CLAIM_CREATED',
+         'CLAIM_APPROVED','CLAIM_REJECTED','CLAIM_WITHDRAWN','COMPLETED',
+         'REVERSED','EXPIRED','DELETED'))
+);
+
+Notes on the polymorphic reference. entity_type plus entity_id is a polymorphic
+association and cannot be constrained by a foreign key, which is a genuine
+weakness and should be acknowledged rather than hidden. Three alternatives were
+considered.
+
+Separate audit tables per entity would restore referential integrity at the cost
+of four near-identical tables and a union view for every cross-entity query.
+
+Four nullable typed foreign keys in one table, with a CHECK ensuring exactly one
+is non-null, would restore integrity and keep one table, at the cost of a wider
+row and an awkward query shape.
+
+The polymorphic design is chosen because the audit table is append-only,
+write-heavy, read-rarely, and its integrity is protected by the fact that only
+the audit service writes to it and always inside the same transaction as the
+change it records. The trade-off is documented here so that it reads as a
+decision rather than an oversight, which is precisely the distinction an examiner
+is looking for.
+
+changed_by is nullable to accommodate system-initiated changes such as the
+expiry job.
+
+Immutability is enforced by privilege, not by convention:
+
+  REVOKE UPDATE, DELETE ON audit_log FROM foundit_app;
+  GRANT  INSERT, SELECT ON audit_log TO foundit_app;
+
+================================================================================
+6. FUNCTIONAL DEPENDENCIES AND NORMALISATION
+================================================================================
+
+This section is the academic heart of the technical design. It is written as an
+argument, not as an assertion, because "our schema is in 3NF" is worth nothing
+without the derivation.
+
+------------------------------------------------------------------------------
+6.1 Method
+------------------------------------------------------------------------------
+
+For each relation we state the attribute set, enumerate the non-trivial
+functional dependencies that hold, identify the candidate keys by computing
+attribute closures, and then test each normal form in order. A relation is in
+First Normal Form if every attribute is atomic; in Second Normal Form if it is
+in 1NF and every non-prime attribute is fully functionally dependent on every
+candidate key; in Third Normal Form if it is in 2NF and no non-prime attribute
+is transitively dependent on a candidate key; in Boyce-Codd Normal Form if for
+every non-trivial dependency X → Y, X is a superkey.
+
+------------------------------------------------------------------------------
+6.2 The Unnormalised Starting Point
+------------------------------------------------------------------------------
+
+It is worth beginning from the design a team would produce without thinking,
+because the normalisation steps then have something to fix.
+
+REPORT_RAW(report_id, reporter_name, reporter_email, reporter_phone,
+           reporter_dept, item_name, category_name, colour_name, brand_name,
+           description, location_name, building, floor, event_date,
+           status, status_history)
+
+First Normal Form violation. status_history holds a sequence of transitions in
+a single attribute — for instance the string "OPEN → MATCHED → CLAIMED". This is
+a repeating group and is not atomic. The 1NF remedy is to extract the history
+into its own relation with one row per transition. That relation is audit_log.
+
+Second Normal Form. With report_id as the sole candidate key, every non-prime
+attribute is trivially fully dependent on it, so the relation is already in 2NF
+once 1NF is satisfied. A 2NF violation would appear if we had used a composite
+key; the natural place this arises is a hypothetical
+MATCH_COMPONENT(lost_id, found_id, component_code, points, lost_item_name)
+relation, where lost_item_name depends on lost_id alone, a proper subset of the
+key. That relation is not in the design, but the example is a useful one to have
+prepared.
+
+Third Normal Form violations. Four transitive dependencies are present.
+
+  report_id → reporter_email → reporter_name, reporter_phone, reporter_dept
+  report_id → location_name  → building, floor
+  report_id → category_name  → (category attributes)
+  report_id → brand_name     → (brand attributes)
+
+In each case a non-prime attribute determines other non-prime attributes. The
+remedy in each case is decomposition into a reference relation plus a foreign
+key, producing users, locations, categories and brands respectively.
+
+The location case is the one to present in detail, because its practical
+consequences are the most vivid. In the unnormalised relation, storing "Central
+Library, Academic Block 1, Ground" in every one of four hundred rows produces
+four hundred opportunities for the building to be recorded inconsistently. An
+update to the building name requires four hundred row updates and will be partial
+if it fails halfway — an update anomaly. Adding a location that has not yet had
+anything lost in it is impossible, because there is no row to put it in — an
+insertion anomaly. Deleting the last report at a location erases the knowledge
+that the location exists — a deletion anomaly. All three vanish on
+decomposition.
+
+------------------------------------------------------------------------------
+6.3 Relation-by-Relation Analysis
+------------------------------------------------------------------------------
+
+users(user_id, full_name, email, password_hash, phone, department, role,
+      is_active, flagged_count, created_at, updated_at)
+
+  FD1  user_id → all other attributes
+  FD2  email   → all other attributes
+
+Candidate keys: {user_id} and {email}, since email carries a UNIQUE constraint
+and therefore determines the row. Prime attributes: user_id, email.
+
+1NF: all attributes atomic. Satisfied.
+2NF: both candidate keys are single attributes, so no partial dependency is
+possible. Satisfied.
+3NF: no non-prime attribute determines another non-prime attribute. In
+particular department does not determine anything, and phone does not determine
+anything. Satisfied.
+BCNF: the determinants are user_id and email, both superkeys. Satisfied.
+
+users is in BCNF.
+
+A subtlety worth raising: if the design required that each department have
+exactly one head whose name were stored here, we would acquire department →
+head_name, a dependency whose determinant is not a superkey, and the relation
+would fall out of 3NF. It does not, because department is a plain descriptive
+attribute. Noticing why a violation does not occur is as informative as noticing
+one that does.
+
+locations(location_id, location_name, building, floor, zone, is_active,
+          created_at)
+
+  FD1  location_id → location_name, building, floor, zone, is_active, created_at
+  FD2  (location_name, building) → location_id, floor, zone, is_active
+
+Candidate keys: {location_id} and {location_name, building}. Prime attributes:
+location_id, location_name, building.
+
+3NF: the non-prime attributes are floor, zone, is_active, created_at. None
+determines another. One might argue building → zone, since a building sits
+wholly within one zone. If that dependency is asserted, then building is a
+non-prime attribute in the first candidate key's view and determines the
+non-prime zone, which is a 3NF violation requiring a buildings relation.
+
+The design decision taken is to accept the dependency and decompose only if the
+building count grows. For version 1.0, zone is denormalised into locations and
+the dependency is documented here explicitly as a known, bounded denormalisation
+with a stated trigger for revisiting. Stating it is strictly better than
+pretending it is absent, and an examiner who spots it will be answered rather
+than surprised.
+
+categories(category_id, category_name, parent_id, requires_staff, is_sensitive,
+           is_active)
+
+  FD1  category_id   → all others
+  FD2  category_name → all others
+
+Candidate keys: {category_id}, {category_name}. BCNF satisfied by the same
+argument as users.
+
+lost_items(lost_id, user_id, item_name, category_id, location_id, colour_id,
+           brand_id, brand_other, description, lost_date, lost_time_from,
+           lost_time_to, status, resolved_at, created_at, updated_at)
+
+  FD1  lost_id → all other attributes
+
+Candidate key: {lost_id} alone. No other attribute or combination is unique; the
+same user can lose two identical objects on the same day in the same place.
+
+1NF: atomic. Note that description is free text, which is atomic in the
+relational sense — it is a single string value — even though it has internal
+structure. The distinction between "atomic" and "structureless" is a common
+confusion and worth being precise about.
+2NF: single-attribute key, no partial dependencies possible. Satisfied.
+3NF: the critical question is whether any non-prime attribute determines
+another. category_id does not determine location_id. location_id does not
+determine anything else in this relation, because building and floor live in
+locations. status does not determine resolved_at as a functional dependency —
+the CHECK constraint enforces a correlation, but a correlation enforced by a
+constraint is not a functional dependency in the relational sense, since
+resolved_at is not determined to a single value by status. Satisfied.
+BCNF: the only determinant is lost_id, a superkey. Satisfied.
+
+lost_items is in BCNF. The same argument applies verbatim to found_items.
+
+matches(match_id, lost_id, found_id, match_score, match_band, reason_json,
+        status, created_at, updated_at)
+
+  FD1  match_id            → all others
+  FD2  (lost_id, found_id) → all others
+  FD3  match_score         → match_band
+
+Candidate keys: {match_id} and {lost_id, found_id}. Prime attributes: match_id,
+lost_id, found_id.
+
+FD3 is the interesting one and it is a genuine dependency: the band is a
+function of the score, as the ck_match_band_consistent constraint asserts.
+match_score is non-prime and match_band is non-prime, so FD3 is a transitive
+dependency on the key and matches is therefore NOT in Third Normal Form as
+written.
+
+This is a real finding and must be handled honestly. Three responses are
+available.
+
+Response A: remove match_band entirely and derive it in every query with a CASE
+expression. This restores 3NF at the cost of repeating the banding logic in
+every query and losing the ability to index on band.
+
+Response B: extract a score_bands(lower_bound, upper_bound, band_name) relation
+and join to it. This restores 3NF properly and has the additional benefit of
+making the thresholds data rather than logic. The join is on a range predicate
+rather than equality, which is slightly less efficient but entirely workable.
+
+Response C: retain match_band as a controlled denormalisation, enforce the
+dependency with the CHECK constraint, and document the violation with its
+justification.
+
+The design selects Response B for the schema and keeps match_band as a
+materialised convenience column, giving both. Concretely: a score_bands
+reference relation is created and is the authoritative definition of the
+thresholds; match_band is populated from it at insert time by the matching
+procedure; and the CHECK constraint guards against drift. The relation matches
+is then in 3NF with respect to its authoritative dependencies, with one
+documented materialised attribute.
+
+  CREATE TABLE score_bands (
+      band_name    match_band PRIMARY KEY,
+      lower_bound  SMALLINT NOT NULL,
+      upper_bound  SMALLINT NOT NULL,
+      CONSTRAINT ck_band_range CHECK (lower_bound <= upper_bound)
+  );
+
+This is the single best normalisation discussion available in the project: a
+violation genuinely present in the naive design, three considered responses, a
+selected response with a reason, and a schema change that implements it. It
+should be presented in exactly that form.
+
+claims(claim_id, match_id, claimant_id, proof_text, status, verifier_id,
+       decision_note, claimed_at, decided_at, completed_at)
+
+  FD1  claim_id → all others
+
+Candidate key: {claim_id}. One might propose (match_id, claimant_id) as a
+candidate key, but it is not: a claimant whose first claim was rejected may
+legitimately file a second with better proof, so the pair is not unique.
+
+3NF and BCNF: the only determinant is claim_id. Satisfied.
+
+audit_log(audit_id, entity_type, entity_id, action, old_status, new_status,
+          changed_by, detail, changed_at)
+
+  FD1  audit_id → all others
+
+Candidate key: {audit_id}. The tuple (entity_type, entity_id, changed_at) is
+very nearly unique but is not guaranteed so, because two audit rows for one
+entity can share a transaction timestamp — NOW() is constant within a
+transaction in PostgreSQL. This is a real and subtle point: the claim approval
+transaction writes four audit rows all carrying the identical changed_at value.
+Anyone tempted to use that tuple as a natural key would produce a bug that
+appears only under the multi-row transaction. The surrogate key avoids it, and
+ordering within a transaction is recovered from audit_id.
+
+3NF and BCNF: satisfied.
+
+------------------------------------------------------------------------------
+6.4 Summary Table
+------------------------------------------------------------------------------
+
+  Relation      1NF  2NF  3NF  BCNF  Notes
+  ------------  ---  ---  ---  ----  ----------------------------------------
+  users         Yes  Yes  Yes  Yes
+  locations     Yes  Yes  Yes  Yes   building → zone accepted, documented
+  categories    Yes  Yes  Yes  Yes
+  colours       Yes  Yes  Yes  Yes
+  brands        Yes  Yes  Yes  Yes
+  score_bands   Yes  Yes  Yes  Yes
+  lost_items    Yes  Yes  Yes  Yes
+  found_items   Yes  Yes  Yes  Yes
+  matches       Yes  Yes  Yes  Yes   band materialised from score_bands
+  claims        Yes  Yes  Yes  Yes
+  audit_log     Yes  Yes  Yes  Yes
+  match_config  Yes  Yes  Yes  Yes
+
+------------------------------------------------------------------------------
+6.5 Deliberate Denormalisations
+------------------------------------------------------------------------------
+
+Three, each recorded with its justification and its guard.
+
+D1. matches.match_band materialised from score_bands. Justification: band is
+filtered and grouped in nearly every match query, and a range join on every read
+is wasteful. Guard: ck_match_band_consistent, plus the matching procedure being
+the only writer.
+
+D2. locations.zone dependent on building. Justification: the building count is
+under twenty and a separate buildings relation would add a join to every
+location-bearing query for negligible benefit. Guard: seed data is the only
+writer; revisit if buildings exceed forty.
+
+D3. users.flagged_count as a running counter rather than a computed aggregate
+over claims. Justification: the alternative is a correlated aggregate evaluated
+whenever a user is displayed. Guard: incremented only inside the claim rejection
+transaction, and reconcilable by a consistency query that compares the counter
+to the aggregate.
+
+Each denormalisation has a named guard. A denormalisation without a guard is
+just a bug waiting to happen, and the presence of the guard is what makes the
+trade-off defensible.
+
+================================================================================
+7. REFERENTIAL INTEGRITY POLICY
+================================================================================
+
+Every foreign key declares an explicit ON DELETE and ON UPDATE action, chosen by
+asking a single question: if the parent row disappeared, would the child row
+still mean anything?
+
+  Child → Parent                  ON DELETE   Reasoning
+  ------------------------------  ----------  ------------------------------
+  lost_items → users              RESTRICT    A report without a reporter is
+                                              meaningless and its audit trail
+                                              would dangle.
+  found_items → users             SET NULL    Anonymous finds are legitimate,
+                                              so a null finder is a valid
+                                              state the schema already allows.
+  lost_items → categories         RESTRICT    Reference data in use must not
+                                              vanish; deactivate instead.
+  lost_items → locations          RESTRICT    Same.
+  lost_items → colours            SET NULL    Colour is optional; losing it
+                                              degrades matching slightly and
+                                              breaks nothing.
+  lost_items → brands             SET NULL    Same.
+  matches → lost_items            CASCADE     A match is derived data with no
+                                              independent meaning.
+  matches → found_items           CASCADE     Same.
+  claims → matches                RESTRICT    A claim is a record of a human
+                                              assertion and must survive.
+  claims → users (claimant)       RESTRICT    Accountability requires the
+                                              claimant to remain identifiable.
+  claims → users (verifier)       SET NULL    The decision stands even if the
+                                              verifier's account is removed.
+  audit_log → users               SET NULL    History outlives accounts.
+  categories → categories         RESTRICT    Prevents orphaned subtrees.
+
+ON UPDATE is CASCADE everywhere. With surrogate integer keys this action should
+never fire, and declaring it costs nothing while protecting against a future
+key-renumbering migration.
+
+The apparent tension between "RESTRICT on claims → users" and NFR-5.4's account
+deletion requirement is resolved by anonymisation rather than deletion. The
+delete-account operation overwrites full_name with a tombstone, nulls email to a
+generated unique placeholder, clears phone and department, and sets is_active to
+false. No row is removed, every foreign key remains valid, and the audit trail
+stays complete. This is the correct pattern and it is worth stating explicitly,
+because "delete the user row" is the obvious wrong answer.
+
+================================================================================
+8. PHYSICAL DESIGN — INDEXING STRATEGY
+================================================================================
+
+------------------------------------------------------------------------------
+8.1 Method
+------------------------------------------------------------------------------
+
+Indexes are not added speculatively. The procedure is: write the query, run
+EXPLAIN ANALYZE against a realistically sized dataset, identify the access path,
+add an index only if the plan shows a sequential scan or an expensive sort on a
+table above one thousand rows, then re-run EXPLAIN ANALYZE and record both plans.
+The recorded before-and-after pair is a deliverable, not a by-product.
+
+------------------------------------------------------------------------------
+8.2 Index Catalogue
+------------------------------------------------------------------------------
+
+Implicit indexes created by primary key and unique constraints are not repeated
+here.
+
+  -- Authentication lookup, case-insensitive
+  CREATE UNIQUE INDEX ux_users_email_lower ON users (lower(email));
+
+  -- The matching query's primary access path on the found side
+  CREATE INDEX ix_found_match_probe
+      ON found_items (category_id, found_date, status)
+      WHERE status = 'AVAILABLE';
+
+  -- The matching query's primary access path on the lost side
+  CREATE INDEX ix_lost_match_probe
+      ON lost_items (category_id, lost_date, status)
+      WHERE status = 'OPEN';
+
+  -- Browse: filtered listing ordered by recency
+  CREATE INDEX ix_found_browse
+      ON found_items (status, found_date DESC, category_id, location_id);
+
+  -- "My reports" listing
+  CREATE INDEX ix_lost_user ON lost_items (user_id, created_at DESC);
+  CREATE INDEX ix_found_user ON found_items (user_id, created_at DESC);
+
+  -- Location analytics
+  CREATE INDEX ix_lost_location ON lost_items (location_id);
+  CREATE INDEX ix_found_location ON found_items (location_id);
+
+  -- Match retrieval for a given report, ranked
+  CREATE INDEX ix_matches_lost ON matches (lost_id, match_score DESC);
+  CREATE INDEX ix_matches_found ON matches (found_id, match_score DESC);
+  CREATE INDEX ix_matches_band ON matches (match_band, status);
+
+  -- Pending claim queues
+  CREATE INDEX ix_claims_match ON claims (match_id, status);
+  CREATE INDEX ix_claims_claimant ON claims (claimant_id, status);
+  CREATE INDEX ix_claims_pending ON claims (claimed_at)
+      WHERE status = 'PENDING';
+
+  -- BR-2: at most one approved claim per found item, enforced physically
+  CREATE UNIQUE INDEX ux_one_approved_claim_per_found
+      ON claims (( (SELECT found_id FROM matches m
+                    WHERE m.match_id = claims.match_id) ))
+      WHERE status IN ('APPROVED','COMPLETED');
+
+  -- Audit trail retrieval for one entity
+  CREATE INDEX ix_audit_entity
+      ON audit_log (entity_type, entity_id, changed_at);
+
+  -- Full-text search over found descriptions
+  ALTER TABLE found_items ADD COLUMN search_vector tsvector
+      GENERATED ALWAYS AS (
+          to_tsvector('english', coalesce(item_name,'') || ' ' ||
+                                 coalesce(description,''))) STORED;
+  CREATE INDEX ix_found_fts ON found_items USING GIN (search_vector);
+
+  ALTER TABLE lost_items ADD COLUMN search_vector tsvector
+      GENERATED ALWAYS AS (
+          to_tsvector('english', coalesce(item_name,'') || ' ' ||
+                                 coalesce(description,''))) STORED;
+  CREATE INDEX ix_lost_fts ON lost_items USING GIN (search_vector);
+
+------------------------------------------------------------------------------
+8.3 Notes on Specific Choices
+------------------------------------------------------------------------------
+
+Partial indexes on the match probes. The matching query only ever considers
+found items that are AVAILABLE and lost items that are OPEN. A partial index
+restricted by that predicate is smaller than a full index — typically by a large
+factor once the system has been running, since most historical items are
+resolved — which means more of it fits in cache and fewer pages are read. This
+is the single most instructive index in the project, because the benefit comes
+from understanding the workload rather than from adding a column.
+
+Column order in the composite probe indexes. category_id first because it is the
+equality predicate and is highly selective across roughly twenty categories;
+found_date second because it carries the range predicate of the date window; the
+status column is redundant given the partial predicate but is retained so the
+index can serve as a covering index for the score computation's inputs on a
+scan-only plan.
+
+The functional unique index for BR-2. This index is unusual and deserves
+comment. The rule is about found items, but the column lives in matches, one
+join away from claims. A scalar subquery inside an index expression is permitted
+in PostgreSQL only if the expression is immutable, which a subquery is not.
+Therefore the practical implementation is one of two alternatives: denormalise
+found_id onto claims and index that, or enforce the rule with a trigger.
+
+The design selects the denormalisation. A found_id column is added to claims,
+populated by a BEFORE INSERT trigger from the referenced match, and the partial
+unique index is created on it directly:
+
+  ALTER TABLE claims ADD COLUMN found_id INTEGER NOT NULL;
+  ALTER TABLE claims ADD CONSTRAINT fk_claim_found
+      FOREIGN KEY (found_id) REFERENCES found_items(found_id)
+      ON DELETE RESTRICT;
+  CREATE UNIQUE INDEX ux_one_approved_claim_per_found
+      ON claims (found_id) WHERE status IN ('APPROVED','COMPLETED');
+
+This is denormalisation D4, and its guard is a trigger asserting that
+claims.found_id always equals the found_id of the referenced match. The
+resulting constraint is declarative, enforced by the storage engine, and immune
+to application bugs and race conditions alike. It is the strongest available
+implementation of the project's most important business rule, and the reasoning
+that led here — a rule that cannot be expressed declaratively, made expressible
+by a controlled schema change — is exactly the kind of thing worth presenting.
+
+GIN indexes on generated tsvector columns. The generated column keeps the vector
+in sync automatically, removing the trigger that older designs required. The GIN
+index makes keyword search an index scan rather than a full-text scan over every
+row.
+
+------------------------------------------------------------------------------
+8.4 Indexes Deliberately Not Created
+------------------------------------------------------------------------------
+
+No index on colour_id or brand_id alone. These columns are low-cardinality and
+are never the leading predicate of any query; a scan of the already-narrowed
+candidate set is cheaper than an index lookup followed by a heap fetch.
+
+No index on lost_items.description or found_items.description as plain B-tree.
+Prefix search on free text is not a requirement; full-text search covers the
+requirement and the GIN index serves it.
+
+No index on audit_log.changed_by. The audit table is queried by entity, never by
+actor, in any current requirement. If an "everything this user did" view is added
+later, the index is added then.
+
+No covering index including description. The column is wide and would bloat the
+index for a benefit realised only on list views that already fetch the heap row.
+
+================================================================================
+9. THE MATCHING ENGINE — TECHNICAL SPECIFICATION
+================================================================================
+
+------------------------------------------------------------------------------
+9.1 Invocation Contract
+------------------------------------------------------------------------------
+
+The engine is invoked in two directions and both are the same code path with the
+anchor side parameterised.
+
+  generate_matches_for_lost(p_lost_id)   — after a lost report is created
+  generate_matches_for_found(p_found_id) — after a found report is created
+
+Both run inside the creating transaction. Both are idempotent. Both return the
+count of rows inserted or updated.
+
+------------------------------------------------------------------------------
+9.2 The Scoring Expression
+------------------------------------------------------------------------------
+
+Expressed as SQL against a joined pair (l, f), with weights read from
+match_config into local variables:
+
+  -- Category: 20
+  CASE WHEN l.category_id = f.category_id THEN w_category ELSE 0 END
+
+  -- Brand: 20, both non-null
+  + CASE WHEN l.brand_id IS NOT NULL AND f.brand_id IS NOT NULL
+              AND l.brand_id = f.brand_id THEN w_brand ELSE 0 END
+
+  -- Location: 20
+  + CASE WHEN l.location_id = f.location_id THEN w_location ELSE 0 END
+
+  -- Colour: 15, both non-null
+  + CASE WHEN l.colour_id IS NOT NULL AND f.colour_id IS NOT NULL
+              AND l.colour_id = f.colour_id THEN w_colour ELSE 0 END
+
+  -- Temporal proximity: graduated 0..15
+  + CASE
+      WHEN f.found_date <  l.lost_date THEN 0
+      WHEN f.found_date =  l.lost_date THEN 15
+      WHEN f.found_date -  l.lost_date = 1 THEN 13
+      WHEN f.found_date -  l.lost_date = 2 THEN 10
+      WHEN f.found_date -  l.lost_date BETWEEN 3 AND 5 THEN 6
+      WHEN f.found_date -  l.lost_date BETWEEN 6 AND 14 THEN 3
+      ELSE 0
+    END
+
+  -- Description overlap: graduated 0..10
+  + CASE
+      WHEN l.search_vector @@ plainto_tsquery('english', f.item_name) THEN 5
+      ELSE 0
+    END
+  + CASE
+      WHEN ts_rank(l.search_vector,
+                   plainto_tsquery('english',
+                       coalesce(f.description, ''))) > 0.05 THEN 5
+      ELSE 0
+    END
+
+The description component uses the full-text machinery rather than a manual
+token intersection. This is a deliberate simplification of the product
+specification's "shared significant keywords" and it is equivalent in effect:
+to_tsvector already performs lower-casing, stop-word removal and stemming, which
+is exactly the normalisation the PRD describes, and it does so with a GIN index
+behind it rather than with a string-splitting function evaluated per row.
+
+An alternative manual implementation, for teams whose engine lacks full-text
+support, is:
+
+  + LEAST(10, 5 * (
+      SELECT count(*) FROM (
+        SELECT unnest(string_to_array(lower(l.description), ' '))
+        INTERSECT
+        SELECT unnest(string_to_array(lower(f.description), ' '))
+      ) t(word)
+      WHERE length(word) >= 4
+        AND word NOT IN ('with','that','this','from','have','near','small')
+    ))
+
+This is correct but is a nested set operation evaluated once per candidate pair,
+which is materially slower and is the reason the full-text form is preferred.
+
+------------------------------------------------------------------------------
+9.3 The Candidate Pre-Filter
+------------------------------------------------------------------------------
+
+Scoring every pair is quadratic and unnecessary. Three pre-filters reduce the
+candidate set before any scoring expression is evaluated, and they are applied
+in the WHERE clause so that the planner can use indexes for them.
+
+Pre-filter 1 — status. Only AVAILABLE found items and OPEN lost items are
+eligible. This is the partial index predicate and is the largest reduction over
+time.
+
+Pre-filter 2 — date window. The found date must lie within DATE_WINDOW_DAYS,
+default 30, after the lost date. A pair outside this window scores zero on the
+temporal component and cannot exceed 85, but more importantly a pair separated
+by six months is almost certainly not the same object. The window is
+configuration rather than a literal.
+
+Pre-filter 3 — minimum viable agreement. A pair must agree on category OR on
+both location and colour. Without this, pairs agreeing on nothing but date are
+scored and discarded, which is wasted work. Expressed as:
+
+  AND ( l.category_id = f.category_id
+        OR ( l.location_id = f.location_id
+             AND l.colour_id IS NOT NULL
+             AND l.colour_id = f.colour_id ) )
+
+Pre-filter 4 — distinct reporters. l.user_id IS DISTINCT FROM f.user_id,
+implementing BR-6. The IS DISTINCT FROM form rather than <> is required because
+found_items.user_id is nullable and <> with a null yields null, which would
+filter out every anonymous find.
+
+------------------------------------------------------------------------------
+9.4 The Full Procedure
+------------------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION generate_matches_for_lost(p_lost_id INTEGER)
+RETURNS INTEGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_floor    INTEGER;
+    v_window   INTEGER;
+    v_version  INTEGER;
+    v_count    INTEGER;
+BEGIN
+    SELECT config_value INTO v_floor
+        FROM match_config WHERE config_key = 'T_FLOOR';
+    SELECT config_value INTO v_window
+        FROM match_config WHERE config_key = 'DATE_WINDOW_DAYS';
+    SELECT max(version) INTO v_version FROM match_config;
+
+    WITH scored AS (
+        SELECT
+            l.lost_id,
+            f.found_id,
+            (  CASE WHEN l.category_id = f.category_id THEN 20 ELSE 0 END
+             + CASE WHEN l.brand_id IS NOT NULL AND f.brand_id IS NOT NULL
+                         AND l.brand_id = f.brand_id THEN 20 ELSE 0 END
+             + CASE WHEN l.location_id = f.location_id THEN 20 ELSE 0 END
+             + CASE WHEN l.colour_id IS NOT NULL AND f.colour_id IS NOT NULL
+                         AND l.colour_id = f.colour_id THEN 15 ELSE 0 END
+             + CASE
+                 WHEN f.found_date <  l.lost_date THEN 0
+                 WHEN f.found_date =  l.lost_date THEN 15
+                 WHEN f.found_date -  l.lost_date = 1 THEN 13
+                 WHEN f.found_date -  l.lost_date = 2 THEN 10
+                 WHEN f.found_date -  l.lost_date BETWEEN 3 AND 5 THEN 6
+                 WHEN f.found_date -  l.lost_date BETWEEN 6 AND 14 THEN 3
+                 ELSE 0 END
+             + LEAST(10, 5 * cardinality(ARRAY(
+                   -- search_vector contains both item_name and description tokens.
+                   SELECT unnest(tsvector_to_array(l.search_vector))
+                   INTERSECT
+                   SELECT unnest(tsvector_to_array(f.search_vector))
+               )))
+            ) AS score,
+            l.category_id = f.category_id          AS m_cat,
+            l.brand_id    = f.brand_id             AS m_brand,
+            l.location_id = f.location_id          AS m_loc,
+            l.colour_id   = f.colour_id            AS m_col,
+            (f.found_date - l.lost_date)           AS day_gap,
+            LEAST(10, 5 * cardinality(ARRAY(
+                   SELECT unnest(tsvector_to_array(l.search_vector))
+                   INTERSECT
+                   SELECT unnest(tsvector_to_array(f.search_vector))
+               ))) AS m_desc_score
+        FROM lost_items  l
+        JOIN found_items f
+          ON  f.status = 'AVAILABLE'
+          AND f.found_date BETWEEN l.lost_date
+                               AND l.lost_date + v_window
+          AND l.user_id IS DISTINCT FROM f.user_id
+          AND ( l.category_id = f.category_id
+                OR ( l.location_id = f.location_id
+                     AND l.colour_id IS NOT NULL
+                     AND l.colour_id = f.colour_id ) )
+        WHERE l.lost_id = p_lost_id
+          AND l.status  = 'OPEN'
+    )
+    INSERT INTO matches (lost_id, found_id, match_score, match_band,
+                         reason_json, status)
+    SELECT
+        s.lost_id,
+        s.found_id,
+        LEAST(s.score, 100),
+        b.band_name,
+        jsonb_build_object(
+            'total', LEAST(s.score, 100),
+            'weights_version', v_version,
+            'components', jsonb_build_array(
+                jsonb_build_object('code','CATEGORY','points',
+                    CASE WHEN s.m_cat THEN 20 ELSE 0 END),
+                jsonb_build_object('code','BRAND','points',
+                    CASE WHEN s.m_brand THEN 20 ELSE 0 END),
+                jsonb_build_object('code','LOCATION','points',
+                    CASE WHEN s.m_loc THEN 20 ELSE 0 END),
+                jsonb_build_object('code','COLOUR','points',
+                    CASE WHEN s.m_col THEN 15 ELSE 0 END),
+                jsonb_build_object('code','DATE','points',
+                    CASE WHEN s.day_gap = 0 THEN 15
+                         WHEN s.day_gap = 1 THEN 13
+                         WHEN s.day_gap = 2 THEN 10
+                         WHEN s.day_gap BETWEEN 3 AND 5 THEN 6
+                         WHEN s.day_gap BETWEEN 6 AND 14 THEN 3
+                         ELSE 0 END,
+                    'gap', s.day_gap),
+                jsonb_build_object('code','DESC','points', s.m_desc_score)
+            )
+        ),
+        'SUGGESTED'
+    FROM scored s
+    JOIN score_bands b
+      ON LEAST(s.score,100) BETWEEN b.lower_bound AND b.upper_bound
+    WHERE s.score >= v_floor
+    ON CONFLICT (lost_id, found_id) DO UPDATE
+        SET match_score = EXCLUDED.match_score,
+            match_band  = EXCLUDED.match_band,
+            reason_json = EXCLUDED.reason_json,
+            updated_at  = NOW()
+        WHERE matches.status = 'SUGGESTED';
+
+    GET DIAGNOSTICS v_count = ROW_COUNT;
+    RETURN v_count;
+END;
+$$;
+
+------------------------------------------------------------------------------
+9.5 Notes on the Implementation
+------------------------------------------------------------------------------
+
+The ON CONFLICT clause is what makes the procedure idempotent per FR-5.5. The
+additional WHERE on the DO UPDATE branch is important: a match that has already
+progressed to CLAIMED or CONFIRMED must not have its score silently rewritten
+underneath an in-flight claim. Re-running the procedure leaves such rows
+untouched.
+
+The join to score_bands rather than a CASE expression is the 3NF resolution from
+section 6.3 made concrete. Changing a threshold is an UPDATE to a reference row,
+not a code change.
+
+LEAST(s.score, 100) appears in three places because the weight sum can exceed
+100 if weights are retuned upward. Capping at the point of use rather than
+trusting the weights to sum correctly is defensive and cheap.
+
+The reverse procedure generate_matches_for_found is structurally identical with
+the anchor predicate on f.found_id and the pre-filter reading l.status = 'OPEN'.
+It is a separate function rather than a parameterised one because a single
+function with a direction flag would prevent the planner from using the correct
+partial index.
+
+------------------------------------------------------------------------------
+9.6 Expected Execution Plan
+------------------------------------------------------------------------------
+
+For a single anchor lost item against 10,000 available found items, the target
+plan is:
+
+  Insert on matches
+    -> Nested Loop
+       -> Index Scan using lost_items_pkey on lost_items l  (1 row)
+       -> Bitmap Heap Scan on found_items f
+          Recheck Cond: (category_id = l.category_id
+                         AND found_date >= l.lost_date
+                         AND found_date <= l.lost_date + 30)
+          -> Bitmap Index Scan on ix_found_match_probe
+
+The nested loop with a single outer row is correct and desirable here. A hash
+join would be wrong, and its appearance in the plan indicates that the anchor
+predicate is not being pushed down — usually because the anchor was written as a
+join condition rather than a WHERE clause.
+
+The measured target is under 200 milliseconds per NFR-1.1. If the plan shows a
+Seq Scan on found_items, the partial index predicate does not match the query
+predicate exactly and must be reconciled.
+
+================================================================================
+10. TRANSACTION DESIGN AND CONCURRENCY CONTROL
+================================================================================
+
+------------------------------------------------------------------------------
+10.1 The Critical Section
+------------------------------------------------------------------------------
+
+Claim approval is the only operation in FoundIt with a genuine concurrency
+hazard, and it is a good one because the hazard arises naturally from the domain
+rather than being invented for demonstration.
+
+The scenario. Two students, A and B, both file lost reports for black
+earphones. Both are matched to the same found item, F. Both submit claims with
+plausible proof. The finder, reviewing a queue on a phone with an unreliable
+connection, double-taps approve; or a staff member and the finder approve
+different claims within the same second.
+
+The naive implementation reads the found item's status, sees AVAILABLE, and
+proceeds. Both transactions read AVAILABLE before either writes. Both approve.
+The result is two approved claims against one physical object, two students told
+the item is theirs, and a system that has actively created a dispute.
+
+------------------------------------------------------------------------------
+10.2 The Transaction
+------------------------------------------------------------------------------
+
+BEGIN;
+
+  -- Step 1. Acquire the lock. This is the entire defence.
+  SELECT found_id, status
+    INTO v_found_id, v_status
+    FROM found_items
+   WHERE found_id = (SELECT found_id FROM claims WHERE claim_id = p_claim_id)
+     FOR UPDATE;
+
+  -- Step 2. Re-verify under the lock. The value read here is authoritative.
+  IF v_status <> 'AVAILABLE' THEN
+      RAISE EXCEPTION 'ITEM_NOT_AVAILABLE'
+          USING ERRCODE = 'P0001';
+  END IF;
+
+  -- Step 3. Verify the claim is still pending.
+  SELECT status INTO v_claim_status
+    FROM claims WHERE claim_id = p_claim_id FOR UPDATE;
+  IF v_claim_status <> 'PENDING' THEN
+      RAISE EXCEPTION 'CLAIM_NOT_PENDING' USING ERRCODE = 'P0001';
+  END IF;
+
+  -- Step 4. Approve this claim.
+  UPDATE claims
+     SET status = 'APPROVED', verifier_id = p_verifier_id, decided_at = NOW()
+   WHERE claim_id = p_claim_id;
+
+  -- Step 5. Move the found item out of circulation.
+  UPDATE found_items SET status = 'CLAIMED', updated_at = NOW()
+   WHERE found_id = v_found_id;
+
+  -- Step 6. Move the linked lost item.
+  UPDATE lost_items SET status = 'MATCHED', updated_at = NOW()
+   WHERE lost_id = (SELECT lost_id FROM matches
+                     WHERE match_id = (SELECT match_id FROM claims
+                                        WHERE claim_id = p_claim_id));
+
+  -- Step 7. Reject every competing pending claim on the same found item.
+  UPDATE claims
+     SET status = 'REJECTED', decided_at = NOW(),
+         decision_note = 'Item claimed by another verified owner'
+   WHERE found_id = v_found_id
+     AND status = 'PENDING'
+     AND claim_id <> p_claim_id;
+
+  -- Step 8. Confirm this match, invalidate the others on the same found item.
+  UPDATE matches SET status = 'CONFIRMED'
+   WHERE match_id = (SELECT match_id FROM claims WHERE claim_id = p_claim_id);
+  UPDATE matches SET status = 'INVALIDATED'
+   WHERE found_id = v_found_id AND status = 'SUGGESTED';
+
+  -- Step 9. Audit every change, inside the same transaction.
+  INSERT INTO audit_log (entity_type, entity_id, action, old_status,
+                         new_status, changed_by, detail)
+  VALUES ('CLAIM', p_claim_id, 'CLAIM_APPROVED', 'PENDING', 'APPROVED',
+          p_verifier_id, 'Proof accepted by verifier'),
+         ('FOUND_ITEM', v_found_id, 'STATUS_CHANGED', 'AVAILABLE', 'CLAIMED',
+          p_verifier_id, NULL),
+         ('LOST_ITEM', v_lost_id, 'STATUS_CHANGED', 'OPEN', 'MATCHED',
+          p_verifier_id, NULL);
+
+COMMIT;
+
+------------------------------------------------------------------------------
+10.3 Why This Works
+------------------------------------------------------------------------------
+
+FOR UPDATE takes a row-level exclusive lock on the found item. The second
+transaction reaching step 1 blocks until the first commits or rolls back. When
+it resumes, its SELECT re-reads the row and sees CLAIMED, not AVAILABLE, and
+step 2 raises. The second approval fails cleanly with a defined error that the
+API layer translates to HTTP 409 Conflict with a message the verifier can
+understand.
+
+The essential property is that the read that informs the decision happens under
+the lock. A common incorrect implementation reads the status without FOR UPDATE,
+then locks, then writes; that ordering leaves the original window open. The lock
+must precede the read whose value is trusted.
+
+------------------------------------------------------------------------------
+10.4 ACID Analysis
+------------------------------------------------------------------------------
+
+Atomicity. Nine steps across four relations succeed together or not at all. If
+step 7 fails on a constraint, steps 4 through 6 are rolled back and the found
+item returns to AVAILABLE. There is no partial approval state.
+
+Consistency. Every declared constraint holds before and after. In particular
+ux_one_approved_claim_per_found holds throughout: even if the locking logic were
+removed, the index would reject the second approval at write time. This is
+defence in depth — the lock provides a clean error, the index provides
+correctness. A design that relies on only one of them is weaker than one that
+has both, and the reason for having both is worth stating.
+
+Isolation. READ COMMITTED, PostgreSQL's default, is sufficient because the
+explicit row lock provides the serialisation that the isolation level does not.
+Under READ COMMITTED without the lock, the anomaly is a lost update: both
+transactions read the same status, both write, and the second write silently
+overwrites the first. Under REPEATABLE READ without the lock, the second
+transaction would instead abort with a serialisation failure, which is safer but
+produces a less specific error and requires retry logic. The chosen design —
+READ COMMITTED plus explicit locking — gives the clearest error with the least
+machinery.
+
+Durability. The commit is not acknowledged until the write-ahead log is flushed
+to durable storage. A power failure immediately after acknowledgement leaves the
+approval present after recovery.
+
+------------------------------------------------------------------------------
+10.5 Deadlock Analysis
+------------------------------------------------------------------------------
+
+A deadlock requires two transactions acquiring two or more locks in opposite
+orders. The approval transaction acquires locks in a fixed order: found_items
+first, then claims, then lost_items, then matches. Every code path that touches
+more than one of these relations follows the same order. With a globally
+consistent lock ordering, deadlock is impossible by construction.
+
+This rule is stated as a development standard: any new transaction touching
+multiple relations must acquire locks in the order found_items → claims →
+lost_items → matches → audit_log. Violating the order is a review-blocking
+defect.
+
+Should a deadlock occur despite this, PostgreSQL detects the cycle after
+deadlock_timeout, aborts one transaction with SQLSTATE 40P01, and the API layer
+retries once before returning an error to the user.
+
+------------------------------------------------------------------------------
+10.6 Other Transaction Boundaries
+------------------------------------------------------------------------------
+
+Report creation. One transaction containing the item INSERT, the match
+generation call, and the audit INSERT. Match generation inside the transaction
+means a report is never visible without its matches. It also means the
+transaction is longer than a bare insert, which is acceptable at 200
+milliseconds but is the reason NFR-1.1 exists.
+
+Claim creation. One transaction containing the pending-claim count check, the
+claim INSERT, the match status update to CLAIMED, and the audit INSERT. The
+count check is advisory; the real guard against runaway claiming is the rate
+limit.
+
+Handover completion. One transaction updating the claim to COMPLETED, the found
+item to RETURNED with returned_at, the lost item to RESOLVED with resolved_at,
+and writing three audit rows. The biconditional CHECK constraints on both item
+relations make a partial update impossible to commit.
+
+Reference data update. Single-statement, no explicit transaction needed.
+
+Expiry job. Batched in chunks of five hundred rows per transaction, so that a
+long-running job does not hold locks across the entire table. Each chunk commits
+independently; partial completion is acceptable because the job is idempotent.
+
+------------------------------------------------------------------------------
+10.7 The Demonstration Script
+------------------------------------------------------------------------------
+
+The concurrency behaviour must be demonstrable, not merely asserted. Two psql
+sessions:
+
+  Session 1                          Session 2
+  --------------------------------   --------------------------------
+  BEGIN;
+  SELECT * FROM found_items
+    WHERE found_id = 204 FOR UPDATE;
+                                     BEGIN;
+                                     SELECT * FROM found_items
+                                       WHERE found_id = 204 FOR UPDATE;
+                                     -- blocks here
+  UPDATE claims SET status='APPROVED'
+    WHERE claim_id = 501;
+  UPDATE found_items SET status='CLAIMED'
+    WHERE found_id = 204;
+  COMMIT;
+                                     -- unblocks, sees status = 'CLAIMED'
+                                     -- application logic raises
+                                     ROLLBACK;
+
+Running the same sequence with FOR UPDATE removed produces two approved claims,
+and the difference between the two runs is the demonstration. Both runs should be
+scripted and rehearsed.
+
+================================================================================
+11. VIEWS, STORED PROCEDURES AND TRIGGERS
+================================================================================
+
+------------------------------------------------------------------------------
+11.1 Views
+------------------------------------------------------------------------------
+
+v_public_found_items — the privacy boundary of NFR-4.4, implemented as a view
+rather than as careful column selection in each endpoint, so that the exclusion
+of private columns is enforced in one place.
+
+  CREATE VIEW v_public_found_items AS
+  SELECT f.found_id, f.item_name,
+         c.category_name, col.colour_name, col.hex_value, b.brand_name,
+         CASE WHEN c.is_sensitive THEN NULL ELSE f.description END
+             AS description,
+         l.building,
+         CASE WHEN c.is_sensitive THEN NULL ELSE l.location_name END
+             AS location_name,
+         f.found_date, f.status,
+         (CURRENT_DATE - f.found_date) AS days_in_system
+    FROM found_items f
+    JOIN categories c  ON c.category_id = f.category_id
+    JOIN locations  l  ON l.location_id = f.location_id
+    LEFT JOIN colours col ON col.colour_id = f.colour_id
+    LEFT JOIN brands  b   ON b.brand_id   = f.brand_id
+   WHERE f.status = 'AVAILABLE';
+
+Note that private_feature, storage_location, user_id and finder_note do not
+appear at all. A developer cannot accidentally leak them through this view,
+because they are not in it.
+
+v_match_detail — the match list with both sides denormalised for display.
+
+  CREATE VIEW v_match_detail AS
+  SELECT m.match_id, m.match_score, m.match_band, m.reason_json, m.status,
+         l.lost_id, l.user_id AS owner_id, l.item_name AS lost_name,
+         l.lost_date, ll.location_name AS lost_location,
+         f.found_id, f.item_name AS found_name, f.found_date,
+         fl.location_name AS found_location, f.custody,
+         u.full_name AS finder_name
+    FROM matches m
+    JOIN lost_items  l  ON l.lost_id  = m.lost_id
+    JOIN found_items f  ON f.found_id = m.found_id
+    JOIN locations  ll  ON ll.location_id = l.location_id
+    JOIN locations  fl  ON fl.location_id = f.location_id
+    LEFT JOIN users  u  ON u.user_id = f.user_id;
+
+finder_name is present in this view but the API selects it only for approved
+claims, per BR-14. A stricter design would split this into two views; the
+simpler design is accepted with the constraint documented as a code review
+checkpoint.
+
+v_item_timeline — the audit trail per item, joined to actor names.
+
+  CREATE VIEW v_item_timeline AS
+  SELECT a.audit_id, a.entity_type, a.entity_id, a.action,
+         a.old_status, a.new_status, a.detail, a.changed_at,
+         coalesce(u.full_name, 'System') AS actor
+    FROM audit_log a
+    LEFT JOIN users u ON u.user_id = a.changed_by
+   ORDER BY a.changed_at, a.audit_id;
+
+v_recovery_stats — the analytics backbone.
+
+  CREATE VIEW v_recovery_stats AS
+  SELECT date_trunc('month', l.created_at)::date AS month,
+         count(*)                                  AS reported,
+         count(*) FILTER (WHERE l.status='RESOLVED') AS recovered,
+         round(100.0 * count(*) FILTER (WHERE l.status='RESOLVED')
+               / nullif(count(*),0), 1)            AS recovery_pct,
+         percentile_cont(0.5) WITHIN GROUP (
+             ORDER BY EXTRACT(EPOCH FROM (l.resolved_at - l.created_at))/86400)
+             FILTER (WHERE l.status='RESOLVED')    AS median_days
+    FROM lost_items l
+   GROUP BY 1;
+
+The FILTER clause is preferred over CASE-inside-aggregate because it is clearer
+and is the standard construct for conditional aggregation. nullif guards against
+division by zero in a month with no reports, which is the defect that otherwise
+appears on the first day of every month.
+
+v_loss_hotspots — ranked locations using a window function.
+
+  CREATE VIEW v_loss_hotspots AS
+  SELECT loc.location_name, loc.building, loc.zone,
+         count(l.lost_id)                                    AS loss_count,
+         round(100.0 * count(l.lost_id) / sum(count(l.lost_id)) OVER (), 1)
+                                                             AS pct_of_total,
+         rank() OVER (ORDER BY count(l.lost_id) DESC)        AS rank_overall,
+         rank() OVER (PARTITION BY loc.zone
+                      ORDER BY count(l.lost_id) DESC)        AS rank_in_zone
+    FROM locations loc
+    LEFT JOIN lost_items l ON l.location_id = loc.location_id
+   GROUP BY loc.location_id, loc.location_name, loc.building, loc.zone;
+
+This view is the project's showcase for window functions: an aggregate inside a
+window frame, a total computed over the whole result with an empty OVER clause,
+and two ranks with different partitioning. Every one of those is a distinct
+examinable construct.
+
+------------------------------------------------------------------------------
+11.2 Stored Procedures
+------------------------------------------------------------------------------
+
+  generate_matches_for_lost(INTEGER) RETURNS INTEGER      — section 9.4
+  generate_matches_for_found(INTEGER) RETURNS INTEGER     — mirror
+  approve_claim(INTEGER, INTEGER) RETURNS VOID            — section 10.2
+  reject_claim(INTEGER, INTEGER, VARCHAR) RETURNS VOID
+  complete_handover(INTEGER, INTEGER) RETURNS VOID
+  expire_stale_reports() RETURNS INTEGER
+  anonymise_user(INTEGER) RETURNS VOID
+
+Placing these in the database rather than the application layer is deliberate.
+The transaction boundary and the SQL are then a single artefact, the logic is
+available to any client, and the demonstration can be performed in psql without
+the application running at all — which is a meaningful advantage when a
+projector and a browser are involved.
+
+------------------------------------------------------------------------------
+11.3 Triggers
+------------------------------------------------------------------------------
+
+trg_set_updated_at — BEFORE UPDATE on every mutable relation, setting
+updated_at = NOW(). Removes the possibility of a developer forgetting.
+
+trg_claims_denormalise_found — BEFORE INSERT on claims, populating found_id from
+the referenced match. This is the guard for denormalisation D4.
+
+  CREATE FUNCTION fn_claims_set_found() RETURNS TRIGGER AS $$
+  BEGIN
+      SELECT found_id INTO NEW.found_id
+        FROM matches WHERE match_id = NEW.match_id;
+      IF NEW.found_id IS NULL THEN
+          RAISE EXCEPTION 'Match % has no found item', NEW.match_id;
+      END IF;
+      RETURN NEW;
+  END; $$ LANGUAGE plpgsql;
+
+trg_no_self_claim — BEFORE INSERT on claims, enforcing BR-1 across tables.
+
+  CREATE FUNCTION fn_no_self_claim() RETURNS TRIGGER AS $$
+  DECLARE v_finder INTEGER;
+  BEGIN
+      SELECT f.user_id INTO v_finder
+        FROM found_items f WHERE f.found_id = NEW.found_id;
+      IF v_finder IS NOT NULL AND v_finder = NEW.claimant_id THEN
+          RAISE EXCEPTION 'A finder cannot claim their own found item'
+              USING ERRCODE = '23514';
+      END IF;
+      RETURN NEW;
+  END; $$ LANGUAGE plpgsql;
+
+trg_audit_immutable — BEFORE UPDATE OR DELETE on audit_log, raising
+unconditionally. This is redundant with the privilege revocation but costs
+nothing and protects against a future migration that accidentally re-grants.
+
+Triggers are used sparingly and only where a constraint cannot express the rule.
+Business logic that could live in a service is not put in a trigger, because
+triggers are invisible at the call site and make behaviour hard to trace.
+
+================================================================================
+12. QUERY CATALOGUE
+================================================================================
+
+A representative selection, chosen to cover the query constructs the syllabus
+examines. Each is annotated with its purpose and the construct it demonstrates.
+
+Q1 — My open lost reports with match counts. Demonstrates LEFT JOIN with
+conditional aggregation.
+
+  SELECT l.lost_id, l.item_name, l.lost_date, loc.location_name,
+         count(m.match_id)                                    AS total_matches,
+         count(m.match_id) FILTER (WHERE m.match_band='STRONG') AS strong
+    FROM lost_items l
+    JOIN locations loc ON loc.location_id = l.location_id
+    LEFT JOIN matches m ON m.lost_id = l.lost_id
+                       AND m.status = 'SUGGESTED'
+   WHERE l.user_id = $1 AND l.status = 'OPEN'
+   GROUP BY l.lost_id, l.item_name, l.lost_date, loc.location_name
+   ORDER BY strong DESC, l.lost_date DESC;
+
+The join predicate on m.status sits in the ON clause rather than the WHERE
+clause, which matters: in the WHERE clause it would convert the outer join to an
+inner join and lose reports that have no matches. This is a classic examinable
+distinction.
+
+Q2 — Unresolved lost items that have at least one strong match. Demonstrates a
+correlated EXISTS subquery.
+
+  SELECT l.lost_id, l.item_name, u.full_name, u.email
+    FROM lost_items l
+    JOIN users u ON u.user_id = l.user_id
+   WHERE l.status = 'OPEN'
+     AND EXISTS (SELECT 1 FROM matches m
+                  WHERE m.lost_id = l.lost_id
+                    AND m.match_band = 'STRONG'
+                    AND m.status = 'SUGGESTED');
+
+EXISTS is preferred over IN with a subquery here because it short-circuits on
+the first matching row and because it handles nulls without surprise.
+
+Q3 — Top five loss locations. Demonstrates grouping, ordering and limiting.
+
+  SELECT loc.location_name, loc.building, count(*) AS loss_count
+    FROM lost_items l
+    JOIN locations loc ON loc.location_id = l.location_id
+   WHERE l.created_at >= CURRENT_DATE - INTERVAL '90 days'
+   GROUP BY loc.location_id, loc.location_name, loc.building
+  HAVING count(*) >= 3
+   ORDER BY loss_count DESC
+   LIMIT 5;
+
+HAVING filters groups after aggregation; the WHERE filters rows before it. Having
+both in one query makes the distinction concrete.
+
+Q4 — Categories where found reports exceed lost reports. Demonstrates a CTE with
+two aggregations and a full outer join.
+
+  WITH lost_by_cat AS (
+      SELECT category_id, count(*) AS n FROM lost_items GROUP BY category_id),
+       found_by_cat AS (
+      SELECT category_id, count(*) AS n FROM found_items GROUP BY category_id)
+  SELECT c.category_name,
+         coalesce(lb.n,0) AS lost_count,
+         coalesce(fb.n,0) AS found_count,
+         coalesce(fb.n,0) - coalesce(lb.n,0) AS surplus
+    FROM categories c
+    LEFT JOIN lost_by_cat  lb ON lb.category_id = c.category_id
+    LEFT JOIN found_by_cat fb ON fb.category_id = c.category_id
+   WHERE coalesce(fb.n,0) > coalesce(lb.n,0)
+   ORDER BY surplus DESC;
+
+Q5 — Each user's most recent report across both relations. Demonstrates UNION
+ALL with a window function for per-group ranking.
+
+  WITH all_reports AS (
+      SELECT user_id, 'LOST' AS kind, lost_id AS id, item_name, created_at
+        FROM lost_items
+      UNION ALL
+      SELECT user_id, 'FOUND', found_id, item_name, created_at
+        FROM found_items WHERE user_id IS NOT NULL
+  ), ranked AS (
+      SELECT *, row_number() OVER (PARTITION BY user_id
+                                   ORDER BY created_at DESC) AS rn
+        FROM all_reports
+  )
+  SELECT user_id, kind, id, item_name, created_at
+    FROM ranked WHERE rn = 1;
+
+UNION ALL rather than UNION because the two branches cannot produce duplicates
+and the deduplication sort would be pure waste. Knowing when not to use UNION is
+worth as much as knowing how to use it.
+
+Q6 — Match conversion rate by band, the tuning instrument for the scoring
+weights.
+
+  SELECT m.match_band,
+         count(*)                                          AS suggested,
+         count(c.claim_id)                                 AS claimed,
+         count(*) FILTER (WHERE c.status IN ('APPROVED','COMPLETED'))
+                                                           AS approved,
+         round(100.0 * count(*) FILTER
+               (WHERE c.status IN ('APPROVED','COMPLETED'))
+               / nullif(count(*),0), 1)                    AS conversion_pct
+    FROM matches m
+    LEFT JOIN claims c ON c.match_id = m.match_id
+   GROUP BY m.match_band
+   ORDER BY m.match_band;
+
+Q7 — Found items ageing beyond ninety days with no pending claim. Demonstrates
+NOT EXISTS and date arithmetic.
+
+  SELECT f.found_id, f.item_name, f.found_date,
+         CURRENT_DATE - f.found_date AS days_held, f.storage_location
+    FROM found_items f
+   WHERE f.status = 'AVAILABLE'
+     AND f.found_date < CURRENT_DATE - INTERVAL '90 days'
+     AND NOT EXISTS (SELECT 1 FROM claims c
+                      WHERE c.found_id = f.found_id
+                        AND c.status = 'PENDING')
+   ORDER BY f.found_date;
+
+Q8 — Audit consistency check, the automated verification of success criterion
+SC5.
+
+  SELECT l.lost_id, l.status AS current_status, a.new_status AS last_audited
+    FROM lost_items l
+    LEFT JOIN LATERAL (
+        SELECT new_status FROM audit_log
+         WHERE entity_type = 'LOST_ITEM' AND entity_id = l.lost_id
+         ORDER BY changed_at DESC, audit_id DESC LIMIT 1
+    ) a ON TRUE
+   WHERE a.new_status IS DISTINCT FROM l.status::text;
+
+A LATERAL join is the correct construct for "the most recent related row per
+outer row", and returning zero rows from this query is the pass condition. It is
+both a demonstration of an advanced join form and a genuine test.
+
+Q9 — Keyword search over available found items, ranked by relevance.
+
+  SELECT f.found_id, f.item_name,
+         ts_rank(f.search_vector, plainto_tsquery('english', $1)) AS rank
+    FROM found_items f
+   WHERE f.status = 'AVAILABLE'
+     AND f.search_vector @@ plainto_tsquery('english', $1)
+   ORDER BY rank DESC, f.found_date DESC
+   LIMIT 20;
+
+Q10 — Users with repeated rejected claims, supporting FR-6.12.
+
+  SELECT u.user_id, u.full_name, count(*) AS rejections
+    FROM claims c
+    JOIN users u ON u.user_id = c.claimant_id
+   WHERE c.status = 'REJECTED'
+     AND c.decided_at >= NOW() - INTERVAL '30 days'
+   GROUP BY u.user_id, u.full_name
+  HAVING count(*) >= 3
+   ORDER BY rejections DESC;
+
+================================================================================
+13. API SPECIFICATION
+================================================================================
+
+------------------------------------------------------------------------------
+13.1 Conventions
+------------------------------------------------------------------------------
+
+Base path /api/v1. JSON request and response bodies. Bearer token in the
+Authorization header. Errors return a consistent envelope:
+
+  { "error": { "code": "ITEM_NOT_AVAILABLE",
+               "message": "This item has already been claimed.",
+               "field": null } }
+
+Status codes are used precisely: 200 for successful reads, 201 for successful
+creation with a Location header, 400 for malformed input, 401 for missing or
+invalid authentication, 403 for authenticated but unauthorised, 404 for absent
+or not-visible-to-you, 409 for a state conflict such as a double approval, 422
+for a semantically invalid but well-formed request, 429 for rate limiting.
+
+The distinction between 403 and 404 matters for privacy: requesting another
+user's match returns 404, not 403, because 403 would confirm that the match
+exists.
+
+------------------------------------------------------------------------------
+13.2 Endpoint Catalogue
+------------------------------------------------------------------------------
+
+  Method  Path                              Auth     Purpose
+  ------  --------------------------------  -------  -----------------------
+  POST    /auth/register                    none     Create account
+  POST    /auth/login                       none     Obtain token
+  POST    /auth/logout                      user     Invalidate token
+  GET     /auth/me                          user     Current profile
+  PATCH   /auth/me                          user     Update own profile
+
+  GET     /reference/categories             user     Controlled vocabulary
+  GET     /reference/locations              user     Controlled vocabulary
+  GET     /reference/colours                user     Controlled vocabulary
+  GET     /reference/brands                 user     Controlled vocabulary
+  POST    /reference/:type                  admin    Add reference row
+  PATCH   /reference/:type/:id              admin    Edit or deactivate
+
+  POST    /lost-items                       user     File lost report
+  GET     /lost-items/mine                  user     Own lost reports
+  GET     /lost-items/:id                   owner    Single lost report
+  PATCH   /lost-items/:id                   owner    Edit while OPEN
+  DELETE  /lost-items/:id                   owner    Withdraw (soft)
+
+  POST    /found-items                      user     File found report
+  GET     /found-items                      user     Public browse, filtered
+  GET     /found-items/mine                 user     Own found reports
+  GET     /found-items/:id                  user     Public detail
+  PATCH   /found-items/:id                  owner    Edit while AVAILABLE
+
+  GET     /matches/for-lost/:lostId         owner    Ranked matches
+  GET     /matches/:id                      owner    Match detail with reasons
+  POST    /matches/:id/dismiss              owner    Reject suggestion
+  POST    /matches/recompute/:lostId        admin    Force regeneration
+
+  POST    /claims                           user     Initiate claim with proof
+  GET     /claims/mine                      user     Claims I filed
+  GET     /claims/to-verify                 user     Claims awaiting my action
+  GET     /claims/:id                       party    Claim detail
+  POST    /claims/:id/approve               verifier Approve (transaction)
+  POST    /claims/:id/reject                verifier Reject with reason
+  POST    /claims/:id/withdraw              claimant Withdraw
+  POST    /claims/:id/complete              party    Confirm handover
+
+  GET     /timeline/:entityType/:entityId   party    Audit trail
+  GET     /analytics/summary                admin    Headline figures
+  GET     /analytics/hotspots               admin    Ranked locations
+  GET     /analytics/conversion             admin    Match band conversion
+  GET     /analytics/ageing                 staff    Items held too long
+
+------------------------------------------------------------------------------
+13.3 Selected Request and Response Shapes
+------------------------------------------------------------------------------
+
+POST /api/v1/lost-items
+
+  Request:
+  { "item_name": "AirPods Pro",
+    "category_id": 2,
+    "location_id": 11,
+    "colour_id": 3,
+    "brand_id": 1,
+    "description": "Black charging case with a small scratch near the hinge",
+    "lost_date": "2026-09-10",
+    "lost_time_from": "14:00",
+    "lost_time_to": "17:30" }
+
+  Response 201:
+  { "lost_id": 101,
+    "status": "OPEN",
+    "created_at": "2026-09-10T18:42:11Z",
+    "matches_generated": 3,
+    "top_match": { "match_id": 302, "score": 98, "band": "STRONG" } }
+
+Returning the match count and the top match in the creation response is a
+deliberate design choice: it lets the client show the result immediately without
+a second round trip, and it makes the value of the system visible at the exact
+moment the user is most receptive to it.
+
+GET /api/v1/matches/for-lost/101
+
+  Response 200:
+  { "lost_item": { "lost_id": 101, "item_name": "AirPods Pro",
+                   "lost_date": "2026-09-10",
+                   "location": "Central Library" },
+    "matches": [
+      { "match_id": 302,
+        "score": 98, "band": "STRONG", "status": "SUGGESTED",
+        "found_item": { "found_id": 204, "item_name": "AirPods",
+                        "found_date": "2026-09-11",
+                        "location": "Central Library",
+                        "custody": "DEPOSITED_SECURITY" },
+        "reasons": [
+          { "code":"CATEGORY", "label":"Same category (Electronics)",
+            "points":20 },
+          { "code":"BRAND",    "label":"Same brand (Apple)",    "points":20 },
+          { "code":"LOCATION", "label":"Same location (Central Library)",
+            "points":20 },
+          { "code":"COLOUR",   "label":"Same colour (White)",   "points":15 },
+          { "code":"DATE",     "label":"Found 1 day after loss","points":13 },
+          { "code":"DESC",     "label":"Shared keywords: black, case", "points": 10 }
+        ] } ],
+    "weak_count": 2 }
+
+The reasons array sums to 98, satisfying FR-5.8. The client must not recompute
+the total; it displays what the server sends.
+
+POST /api/v1/claims/:id/approve
+
+  Request:  { "note": "Answer matches the engraving." }
+  Response 200: { "claim_id": 501, "status": "APPROVED",
+                  "counterparty": { "name": "Rahul S.",
+                                    "email": "rahul@vitstudent.ac.in",
+                                    "phone": "+91..." } }
+  Response 409: { "error": { "code": "ITEM_NOT_AVAILABLE",
+                             "message": "This item has already been claimed." }}
+
+The counterparty block appears only in the 200 response and only after approval,
+implementing BR-14 at the API boundary.
+
+================================================================================
+14. SECURITY IMPLEMENTATION
+================================================================================
+
+------------------------------------------------------------------------------
+14.1 Authentication
+------------------------------------------------------------------------------
+
+Passwords hashed with bcrypt at cost factor 12, which is a deliberate balance:
+high enough that offline cracking is expensive, low enough that login latency
+stays under 300 milliseconds on modest hardware. The cost factor is stored
+inside the hash, so it can be raised later and existing hashes upgraded on next
+successful login.
+
+Tokens are JWTs signed with HS256 using a secret loaded from the environment,
+never from source. Payload carries user_id, role and expiry, and nothing else —
+in particular no email and no name, because a JWT payload is base64, not
+encrypted, and anyone holding the token can read it.
+
+Access token lifetime is one hour. Refresh tokens are stored server-side in a
+sessions relation so that logout is a genuine revocation rather than a client-
+side token discard.
+
+------------------------------------------------------------------------------
+14.2 Authorisation
+------------------------------------------------------------------------------
+
+Three checks, applied in order by middleware:
+
+Authentication check — is there a valid token?
+Role check — does the role permit this endpoint at all?
+Ownership check — does this user own or participate in this specific row?
+
+The ownership check is a database predicate, not an application comparison. The
+query for a single lost item is:
+
+  SELECT ... FROM lost_items WHERE lost_id = $1 AND user_id = $2
+
+rather than fetching by id and comparing in code. The difference is that the
+former cannot leak the row even transiently and cannot be bypassed by a code
+path that forgets the comparison.
+
+------------------------------------------------------------------------------
+14.3 Injection Prevention
+------------------------------------------------------------------------------
+
+All SQL uses numbered placeholders. The query module exposes no function
+accepting a raw SQL string from a caller. Dynamic ordering, which is the usual
+place injection sneaks in through a sort parameter, is handled by mapping the
+client's sort key through an allow-list to a fixed fragment:
+
+  const SORT = { date: 'found_date DESC', name: 'item_name ASC',
+                 relevance: 'rank DESC' };
+  const orderBy = SORT[req.query.sort] ?? SORT.date;
+
+The user's string never reaches the SQL text; only a key lookup does.
+
+------------------------------------------------------------------------------
+14.4 Rate Limiting
+------------------------------------------------------------------------------
+
+  POST /auth/login     5 attempts per 15 minutes per IP and per email
+  POST /auth/register  3 per hour per IP
+  POST /claims         5 per hour per user
+  All others           100 per minute per user
+
+The per-email login limit matters as much as the per-IP limit, because an
+attacker distributing attempts across addresses defeats the IP limit alone.
+
+------------------------------------------------------------------------------
+14.5 Data Protection
+------------------------------------------------------------------------------
+
+The private_feature column is readable only by the claim verification endpoint
+and only for the verifier of a pending claim. This is enforced by the query,
+which joins claims and checks verifier eligibility in the WHERE clause.
+
+Logging redacts password, token and proof_text fields by name before any
+serialisation. The redaction list is applied at the logger, not at each call
+site.
+
+A database role foundit_app holds SELECT, INSERT, UPDATE on business relations,
+INSERT and SELECT only on audit_log, and EXECUTE on the stored procedures. It
+holds no DDL privileges. Migrations run as a separate owner role.
+
+================================================================================
+15. PERFORMANCE ENGINEERING
+================================================================================
+
+------------------------------------------------------------------------------
+15.1 Budgets
+------------------------------------------------------------------------------
+
+  Operation                     Budget    Measured at
+  ----------------------------  --------  ---------------------------
+  Login                         300 ms    10k users
+  Create lost report + matches  200 ms    10k found items
+  Browse page 1 with filters    300 ms    10k found items
+  Match list for one report      80 ms    30 matches
+  Claim approval transaction    500 ms    contended
+  Analytics summary             800 ms    full history
+
+------------------------------------------------------------------------------
+15.2 Method
+------------------------------------------------------------------------------
+
+Seed the database to target volume with a generator script that produces
+realistic distributions — not uniform random, because uniform data makes every
+index look equally good and hides selectivity problems. Category frequency
+follows a long tail, location frequency is concentrated in a handful of places,
+and date distribution clusters around term dates.
+
+Then, for each budgeted operation, run EXPLAIN (ANALYZE, BUFFERS) ten times,
+discard the first as cold, and record the median. Capture the plan text into the
+documentation directory. Repeat after every index change.
+
+------------------------------------------------------------------------------
+15.3 Known Hotspots and Their Treatment
+------------------------------------------------------------------------------
+
+The match generation join is the primary hotspot and is treated by the partial
+indexes and the pre-filters of section 9.3.
+
+The matches relation's growth is the secondary hotspot. It is monitored by an
+assertion in the test suite: after seeding, the row count in matches must not
+exceed eight times the row count in lost_items. A failure of that assertion
+means a pre-filter or the floor is wrong, and it fails loudly at seeding time
+rather than quietly in production.
+
+The analytics views over full history are the third. They are acceptable at
+project scale. If they were not, the treatment would be a materialised view
+refreshed nightly, and the decision not to materialise now is recorded so that it
+reads as a choice.
+
+Connection pooling is set to a maximum of twenty connections, which is well
+above the concurrency requirement and well below anything that would strain the
+database. An unbounded pool is the usual cause of a database that falls over
+under load that the application could otherwise handle.
+
+================================================================================
+16. TESTING STRATEGY
+================================================================================
+
+------------------------------------------------------------------------------
+16.1 Layers
+------------------------------------------------------------------------------
+
+Schema tests. Assert that each constraint rejects what it should. For every
+CHECK, UNIQUE and FOREIGN KEY in section 5, one test attempts the violation and
+asserts the specific SQLSTATE. These tests are fast, they document the schema
+executably, and they catch a migration that silently drops a constraint.
+
+Query tests. Run each catalogued query against a known fixture and assert the
+exact result set. The matching query gets twenty hand-computed pairs with their
+expected scores; if the engine and the hand computation disagree, one of them is
+wrong and both are worth checking.
+
+Transaction tests. The concurrency test of section 10.7, automated with two
+connections and explicit synchronisation, asserting exactly one approval.
+
+API tests. Supertest against the running application for each endpoint, covering
+the happy path, the unauthorised path, the not-found path and at least one
+validation failure.
+
+Privacy tests. For every public endpoint, assert that the serialised response
+contains none of the strings 'private_feature', 'storage_location',
+'password_hash' or 'proof_text'. This is a crude test and it is effective
+precisely because it is crude.
+
+------------------------------------------------------------------------------
+16.2 The Evaluation Dataset
+------------------------------------------------------------------------------
+
+Two hundred lost reports, two hundred found reports, sixty ground-truth pairs,
+constructed so that the pairs span the difficulty range: twenty easy pairs
+agreeing on every attribute, twenty medium pairs with one or two attribute
+mismatches or a three-day gap, twenty hard pairs sharing only category, location
+and an approximate date.
+
+Success criteria SC1 and SC2 are measured against this dataset and the
+measurement is repeated after every scoring weight change. The dataset is
+version-controlled alongside the code, because a tuning exercise against a
+dataset nobody else can reproduce is not evidence.
+
+------------------------------------------------------------------------------
+16.3 Coverage Targets
+------------------------------------------------------------------------------
+
+Every constraint has a negative test. Every stored procedure has at least one
+success and one failure test. Every endpoint has at least three tests. The
+claim approval transaction has a concurrency test. The audit consistency query
+Q8 runs as a test and must return zero rows.
+
+Line coverage is not a target. Constraint coverage and state-transition coverage
+are, because they are what actually protect the data.
+
+================================================================================
+17. DEPLOYMENT, MIGRATION AND OPERATIONS
+================================================================================
+
+------------------------------------------------------------------------------
+17.1 Migrations
+------------------------------------------------------------------------------
+
+Sequentially numbered, forward-only, each with an up and a down. Numbering by
+timestamp prefix avoids the collision that sequential integers cause when two
+developers add a migration on the same day.
+
+  <timestamp>_types.sql              Enumerated types
+  <timestamp>_reference_tables.sql   locations, categories, colours, brands, bands
+  <timestamp>_users.sql              users and sessions
+  <timestamp>_items.sql              lost_items, found_items, generated columns
+  <timestamp>_matches_claims.sql     matches, claims, denormalised found_id
+  <timestamp>_audit.sql              audit_log and privilege revocation
+  <timestamp>_indexes.sql            every index from section 8
+  <timestamp>_views.sql              every view from section 11.1
+  <timestamp>_procedures.sql         stored procedures
+  <timestamp>_triggers.sql           triggers
+  <timestamp>_seed_reference.sql     controlled vocabularies and config
+
+Rule: no manual schema change, ever. A change that exists only in a developer's
+local database is a change that will be missing on demonstration day.
+
+------------------------------------------------------------------------------
+17.2 Environments
+------------------------------------------------------------------------------
+
+Local development, with a seeded small dataset for fast iteration.
+Test, recreated from migrations before every test run, guaranteeing that the
+migration chain works from empty.
+Demonstration, seeded with the evaluation dataset plus a curated narrative
+dataset containing the specific records used in the demonstration script.
+
+The narrative dataset matters more than it sounds. A demonstration that requires
+the presenter to type a realistic lost report live, hoping the match appears,
+is a demonstration with an avoidable failure mode.
+
+------------------------------------------------------------------------------
+17.3 Backup and Recovery
+------------------------------------------------------------------------------
+
+pg_dump nightly to a timestamped file, retained for seven days, plus one dump
+taken immediately before the demonstration and verified by restoring it into a
+scratch database. A backup that has never been restored is a hypothesis, not a
+backup.
+
+------------------------------------------------------------------------------
+17.4 Configuration
+------------------------------------------------------------------------------
+
+All configuration by environment variable: DATABASE_URL, JWT_SECRET,
+TOKEN_TTL_MINUTES, ALLOWED_EMAIL_DOMAINS, PORT, LOG_LEVEL. No secret in source
+control. A committed .env.example documents every variable with a safe default
+or a clear placeholder.
+
+================================================================================
+18. TECHNICAL RISKS AND MITIGATIONS
+================================================================================
+
+TR-1 Match query degrades as data grows. Detection: the performance assertion in
+the test suite fails. Mitigation: the partial indexes, the date window, and a
+documented fallback of restricting the window further.
+
+TR-2 Matches table grows quadratically. Detection: the row-count assertion at
+seeding. Mitigation: raise T_FLOOR, tighten the pre-filter, and in the extreme
+add a per-lost-item cap retaining only the top twenty candidates.
+
+TR-3 Concurrency defect in approval. Detection: the automated concurrency test.
+Mitigation: the row lock plus the partial unique index, either of which alone is
+sufficient for correctness.
+
+TR-4 Private data leak through a new endpoint. Detection: the privacy test
+applied to every public endpoint. Mitigation: public endpoints read from
+v_public_found_items, which does not contain the columns.
+
+TR-5 Migration drift between developer machines. Detection: the test environment
+is rebuilt from migrations on every run. Mitigation: the no-manual-change rule.
+
+TR-6 Full-text search unavailable on the chosen engine. Detection: at the first
+migration run. Mitigation: the manual token intersection given in 9.2, with a
+documented performance cost.
+
+TR-7 CHECK constraint using CURRENT_DATE rejected by the engine. Detection: at
+migration. Mitigation: the BEFORE INSERT trigger noted in 5.5.
+
+TR-8 Deadlock under concurrent approvals. Detection: SQLSTATE 40P01 in logs.
+Mitigation: the global lock ordering of 10.5 plus a single automatic retry.
+
+================================================================================
+19. APPENDICES
+================================================================================
+
+------------------------------------------------------------------------------
+Appendix A — Complete Table Inventory
+------------------------------------------------------------------------------
+
+  Relation       Est. rows/yr  Growth      Primary access pattern
+  -------------  ------------  ----------  ----------------------------------
+  users              3,000     Linear      By id, by lower(email)
+  locations             80     Static      Full scan, cached
+  categories            20     Static      Full scan, cached
+  colours               25     Static      Full scan, cached
+  brands                60     Slow        Full scan, cached
+  score_bands            3     Static      Range join
+  lost_items         6,000     Linear      By user, by id, by match probe
+  found_items        2,400     Linear      By status+date, by match probe
+  matches           30,000     Linear*     By lost_id ranked, by found_id
+  claims             1,500     Linear      By match, by claimant, by verifier
+  audit_log         50,000     Monotonic   By entity_type+entity_id
+  match_config          12     Static      Full scan, cached at boot
+
+  * Linear by design; quadratic if the pre-filters are removed.
+
+------------------------------------------------------------------------------
+Appendix B — SQLSTATE Mapping
+------------------------------------------------------------------------------
+
+  23505  unique_violation       → 409 with a field-specific message
+  23503  foreign_key_violation  → 422 referenced entity does not exist
+  23514  check_violation        → 422 with the constraint name mapped to text
+  23502  not_null_violation     → 400 missing required field
+  40001  serialization_failure  → retry once, then 503
+  40P01  deadlock_detected      → retry once, then 503
+  P0001  raise_exception        → 409 with the custom code in the message
+
+------------------------------------------------------------------------------
+Appendix C — Naming Standards
+------------------------------------------------------------------------------
+
+  Primary key constraint    pk_<table>              (implicit, unnamed)
+  Foreign key constraint    fk_<table>_<parent>
+  Unique constraint         uq_<table>_<columns>
+  Check constraint          ck_<table>_<rule>
+  Index                     ix_<table>_<purpose>
+  Unique index              ux_<table>_<purpose>
+  View                      v_<subject>
+  Function                  fn_<action> or <verb>_<object>
+  Trigger                   trg_<table>_<event>
+
+Constraint names appear in error messages, which is why they are worth naming
+deliberately: ck_found_storage tells a developer exactly what failed, whereas
+found_items_check_3 tells them nothing.
+
+------------------------------------------------------------------------------
+Appendix D — Traceability Matrix (extract)
+------------------------------------------------------------------------------
+
+  PRD Req   TRD Realisation
+  --------  --------------------------------------------------------------
+  FR-1.2    uq_users_email, ux_users_email_lower
+  FR-1.4    bcrypt cost 12, users.password_hash CHAR(60)
+  FR-2.3    categories relation, fk_lost_category ON DELETE RESTRICT
+  FR-2.4    locations relation, fk_lost_location ON DELETE RESTRICT
+  FR-2.6    ck_lost_date_not_future
+  FR-2.8    generate_matches_for_lost, called in the creation transaction
+  FR-3.4    found_items.private_feature NOT NULL, excluded from
+            v_public_found_items
+  FR-4.5    v_public_found_items column list
+  FR-5.2    ck_match_score_range
+  FR-5.4    uq_match_pair
+  FR-5.5    ON CONFLICT DO UPDATE with status guard
+  FR-5.6    score_bands relation + ck_match_band_consistent
+  FR-5.8    matches.reason_json, rendered verbatim by the client
+  FR-6.4    ux_one_approved_claim_per_found (partial unique index)
+  FR-6.6    approve_claim() transaction, section 10.2
+  FR-7.1    audit_log, written inside every state-changing transaction
+  FR-7.2    REVOKE UPDATE, DELETE + trg_audit_immutable
+  FR-7.4    Audit INSERT inside the same transaction
+  BR-1      trg_no_self_claim
+  BR-6      l.user_id IS DISTINCT FROM f.user_id in the match pre-filter
+  BR-10     ON DELETE RESTRICT on all reference foreign keys
+  BR-11     Privilege revocation on audit_log
+  BR-12     SELECT ... FOR UPDATE + status re-verification
+  NFR-1.1   ix_found_match_probe partial index, measured plan in section 9.6
+  NFR-3.2   Every rule in section 12 of the PRD mapped to a constraint here
+  NFR-4.1   Parameterised queries only; allow-listed sort keys
+  NFR-5.4   anonymise_user() rather than DELETE
+
+================================================================================
+END OF DOCUMENT — FI-TRD-001 v1.1
+================================================================================

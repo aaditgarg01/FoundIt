@@ -1,0 +1,14 @@
+================================================================================
+FOUNDIT — SMART CAMPUS LOST & FOUND
+CHANGELOG
+================================================================================
+
+This file is the single source of truth for cross-document changes.
+
+19 Sep 2026 - Aadit Garg (Agent)
+--------------------------------
+- Version bumped to 1.1 across all spec documents.
+- Fixed description overlap scoring logic in TRD 9.4 and related labels in PRD/TRD/Design Flow/App Flow.
+- Added is_high_value to found_items and updated verification routing in TRD, PRD, and App Flow.
+- Added CHANGELOG.txt and referenced it in PRD 19.3.
+

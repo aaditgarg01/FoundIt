@@ -1,0 +1,1336 @@
+================================================================================
+FOUNDIT — SMART CAMPUS LOST & FOUND
+DESIGN FLOW DOCUMENT
+================================================================================
+
+Document ID .............. FI-DFL-001
+Version .................. 1.1
+Status ................... Baselined
+Date ..................... 18 September 2026
+Author ................... Aadit Garg (25BCE2315)
+Depends On ............... FI-PRD-001 v1.0, FI-AFL-001 v1.0
+
+================================================================================
+TABLE OF CONTENTS
+================================================================================
+
+1.  Design Philosophy
+2.  Design Principles
+3.  Visual Language — Colour
+4.  Visual Language — Typography
+5.  Spacing, Layout and Grid
+6.  Component Library
+7.  Screen Designs — Wireframes and Specifications
+8.  Interaction Design
+9.  Motion and Transitions
+10. Responsive Design
+11. Accessibility
+12. Content and Voice
+13. Iconography and Imagery
+14. Design Tokens Reference
+15. Design Review Checklist
+
+================================================================================
+1. DESIGN PHILOSOPHY
+================================================================================
+
+------------------------------------------------------------------------------
+1.1 The Emotional Context
+------------------------------------------------------------------------------
+
+Every design decision in FoundIt is made in the awareness that the person using
+it is in one of two states, and that they are different states requiring
+different treatment.
+
+The owner is mildly distressed. They have lost something, they are annoyed with
+themselves, and they want the problem to go away. They are not browsing. They
+are not exploring. They want to perform one action and get one answer. Anything
+that delays that answer — an onboarding carousel, a feature tour, a decorative
+animation, a form field they do not understand — is experienced as an obstacle
+between them and their earphones.
+
+The finder is mildly virtuous and entirely uninvested. They have picked
+something up and are doing a small favour. Their willingness is real but finite,
+and it decays with every second of friction. If the form asks for something they
+have to think about, a meaningful fraction of them will close the tab and leave
+the item where it is.
+
+The design serves both by being fast and legible above all else. The visual
+language is quiet. Nothing decorative competes with the content. The single
+place the interface is allowed to be expressive is the match card, because that
+is the moment the product delivers its value and the moment where a little
+confidence-building emphasis is earned.
+
+------------------------------------------------------------------------------
+1.2 What This Is Not
+------------------------------------------------------------------------------
+
+It is not a social product. There are no profiles to browse, no reputation
+scores displayed to peers, no comments, no likes. Every one of those would add
+surface area, privacy exposure and build time for no contribution to either core
+journey.
+
+It is not a marketplace. There is no transaction, no price, no negotiation, and
+the visual language deliberately avoids commerce conventions — no "buy" buttons,
+no cart, no product-grid aesthetic that would encourage browsing-as-shopping.
+
+It is not a dashboard product. The administrative analytics exist, but they are a
+back room. The front of the product is two buttons.
+
+================================================================================
+2. DESIGN PRINCIPLES
+================================================================================
+
+Six principles, ordered. When two conflict, the earlier wins.
+
+------------------------------------------------------------------------------
+P1 — Speed of comprehension over density of information
+------------------------------------------------------------------------------
+
+A person scanning a list of forty found items is performing visual pattern
+matching, not reading. The card layout therefore leads with the two attributes
+that support recognition fastest — a colour swatch and a category icon — and
+places text second. A dense table showing eight columns would carry more
+information per screen and would be slower to scan, which makes it worse.
+
+------------------------------------------------------------------------------
+P2 — Say what happened, not what the system did
+------------------------------------------------------------------------------
+
+Every message is written from the user's position. "Someone else's claim on this
+item was approved a moment ago" rather than "Conflict: row locked". "Choose a
+date on or before today" rather than "Constraint violation: ck_lost_date_not_
+future". The database's vocabulary never reaches the screen.
+
+------------------------------------------------------------------------------
+P3 — Show the reasoning
+------------------------------------------------------------------------------
+
+The match score is not presented as a verdict. It is presented as an argument
+with its premises visible. A user who can see that the score came from category,
+brand, colour, location and a one-day gap will trust an 87 and will correctly
+distrust a 62. A user shown only the number has no basis for either.
+
+------------------------------------------------------------------------------
+P4 — Make the privacy boundary visible
+------------------------------------------------------------------------------
+
+The public and private description fields are visually distinct, labelled, and
+carry explicit visibility notes. A user who does not understand which of their
+words will be shown publicly will either over-share or under-share, and both are
+failures. The lock icon and the sentence beneath the field are not decoration;
+they are the mechanism by which the verification system gets useful input.
+
+------------------------------------------------------------------------------
+P5 — Design the empty state first
+------------------------------------------------------------------------------
+
+Every list in this product is empty for its first user and empty again for every
+user whose report has no matches yet. The empty state is therefore the most
+frequently seen state in the early life of the product, and it is designed
+before the populated state, not after.
+
+------------------------------------------------------------------------------
+P6 — Never let a destructive action be one tap away
+------------------------------------------------------------------------------
+
+Dismissing a match, withdrawing a report, approving a claim and disposing of an
+item all pass through a confirmation. Dismissing a match additionally offers ten
+seconds of undo, because it is the easiest damaging mistake available and the
+one with the least visible consequence.
+
+================================================================================
+3. VISUAL LANGUAGE — COLOUR
+================================================================================
+
+------------------------------------------------------------------------------
+3.1 Approach
+------------------------------------------------------------------------------
+
+The palette is restrained: one brand hue, one accent, a neutral ramp, and four
+semantic colours. Colour carries meaning in exactly three places — status
+badges, match bands, and item colour swatches — and nowhere else. Where colour
+carries meaning, it is never the only carrier, because roughly one in twelve men
+has a colour vision deficiency and because a badge that reads only as "green" is
+useless in a screenshot printed in monochrome for a report.
+
+------------------------------------------------------------------------------
+3.2 Palette
+------------------------------------------------------------------------------
+
+  Brand
+    --brand-700   #12405C   Headings on light, pressed states
+    --brand-600   #14568A   Primary action background
+    --brand-500   #1C6FB0   Hover
+    --brand-100   #DCEBF7   Selected backgrounds, subtle fills
+    --brand-050   #F1F7FC   Page tint
+
+  Accent (used only for the match-confidence emphasis)
+    --accent-600  #B4520A
+    --accent-100  #FBE9D8
+
+  Neutrals
+    --ink-900     #14181C   Primary text
+    --ink-700     #3A444E   Secondary text
+    --ink-500     #6B7883   Tertiary text, placeholders
+    --ink-300     #B8C1C9   Borders
+    --ink-200     #DCE2E7   Dividers
+    --ink-100     #F0F3F5   Surfaces
+    --ink-000     #FFFFFF   Cards
+
+  Semantic
+    --ok-600      #1D7A4C   Resolved, returned, approved
+    --ok-100      #DDF2E7
+    --warn-600    #9A6B06   Pending, awaiting verification
+    --warn-100    #FBF0D5
+    --err-600     #A8301F   Rejected, expired, errors
+    --err-100     #FBE2DE
+    --info-600    #14568A   Informational, matched
+    --info-100    #DCEBF7
+
+------------------------------------------------------------------------------
+3.3 Colour Semantics
+------------------------------------------------------------------------------
+
+  Status              Colour       Also indicated by
+  ------------------  -----------  ------------------------------------------
+  OPEN                info         The word "Open" and an outline dot
+  AVAILABLE           info         The word "Available"
+  MATCHED             warn         The word "Matched" and a link icon
+  CLAIMED             warn         The word "Claimed"
+  PENDING             warn         The word "Pending" and a clock icon
+  APPROVED            ok           The word "Approved" and a check icon
+  RESOLVED / RETURNED ok           The word and a filled check
+  REJECTED            err          The word and a cross icon
+  EXPIRED / DISPOSED  ink-500      The word, in grey, de-emphasised
+
+  Band                Treatment
+  ------------------  ------------------------------------------------------
+  STRONG              Brand-600 numeric badge, brand-100 card border, the
+                      word "Strong match" in full
+  POSSIBLE            Ink-700 numeric badge, ink-200 border, "Possible match"
+  WEAK                Ink-500 numeric badge, no border emphasis, "Weak match",
+                      collapsed by default
+
+Note that STRONG uses the brand colour rather than green. Green would read as
+"confirmed", and a strong match is a suggestion, not a confirmation. The
+distinction matters: a user who reads green as certainty is more likely to file a
+careless claim.
+
+------------------------------------------------------------------------------
+3.4 Item Colour Swatches
+------------------------------------------------------------------------------
+
+The colours table carries a hex value per row precisely so that a swatch can be
+rendered. Swatches appear on browse cards, on the report form's colour selector,
+and on match cards.
+
+A swatch is a 20-pixel rounded square with a one-pixel --ink-300 border, which is
+necessary because a white swatch on a white card is otherwise invisible. The
+colour name accompanies the swatch in every context; the swatch is an
+accelerator, never the sole label.
+
+================================================================================
+4. VISUAL LANGUAGE — TYPOGRAPHY
+================================================================================
+
+------------------------------------------------------------------------------
+4.1 Typeface
+------------------------------------------------------------------------------
+
+A single family, Inter, with the system stack as fallback:
+
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI",
+               Roboto, "Helvetica Neue", Arial, sans-serif;
+
+One family, three weights (400, 500, 700). A second display family was
+considered and rejected: it would add a font request, a flash of unstyled text,
+and no comprehension benefit in an interface whose longest heading is four
+words.
+
+Numerals are set with tabular figures wherever they appear in a column — match
+scores, day counts, analytics figures — so that digits align vertically.
+
+  font-variant-numeric: tabular-nums;
+
+------------------------------------------------------------------------------
+4.2 Type Scale
+------------------------------------------------------------------------------
+
+A 1.25 ratio scale, truncated to seven steps. More steps invite inconsistency
+without adding expressiveness.
+
+  Token        Size    Line height   Weight   Use
+  -----------  ------  ------------  -------  ---------------------------
+  --t-display  32px    38px          700      Landing headline only
+  --t-h1       26px    32px          700      Screen titles
+  --t-h2       20px    28px          600      Section headings
+  --t-h3       17px    24px          600      Card titles
+  --t-body     15px    23px          400      Body text, form values
+  --t-small    13px    19px          400      Metadata, helper text
+  --t-micro    11px    16px          500      Badges, uppercase labels
+
+Minimum body size is 15 pixels rather than the more common 14. The extra pixel
+costs one line of vertical space per paragraph and measurably improves reading
+on a phone held at arm's length, which is the actual usage posture.
+
+------------------------------------------------------------------------------
+4.3 Measure and Hierarchy
+------------------------------------------------------------------------------
+
+Body text is constrained to 68 characters maximum, achieved with a max-width of
+34rem on prose containers. Beyond about 75 characters the eye loses the line
+return, which is why a full-width paragraph on a desktop monitor is harder to
+read than a narrow one.
+
+Hierarchy is established by weight and spacing before it is established by size.
+Two adjacent elements at 17px/600 and 15px/400 with 8 pixels between them read as
+a clear title-and-detail pair; the same pair at 22px and 15px with no spacing
+change reads as noisier.
+
+================================================================================
+5. SPACING, LAYOUT AND GRID
+================================================================================
+
+------------------------------------------------------------------------------
+5.1 Spacing Scale
+------------------------------------------------------------------------------
+
+A 4-pixel base with a restricted set of steps. Restriction is the point: a
+designer or developer choosing between 4, 8, 12, 16, 24, 32, 48 and 64 will
+produce a consistent interface. One choosing freely will not.
+
+  --s-1   4px    Icon-to-label gap
+  --s-2   8px    Within a component
+  --s-3   12px   Between tightly related elements
+  --s-4   16px   Standard element gap, card padding on mobile
+  --s-5   24px   Card padding on desktop, between cards
+  --s-6   32px   Between sections
+  --s-7   48px   Between major regions
+  --s-8   64px   Page top and bottom margins on desktop
+
+------------------------------------------------------------------------------
+5.2 Grid
+------------------------------------------------------------------------------
+
+  Breakpoint    Width      Columns   Gutter   Margin
+  ------------  ---------  --------  -------  --------
+  Mobile        < 640px    4         16px     16px
+  Tablet        640–1023   8         20px     24px
+  Desktop       ≥ 1024px   12        24px     auto, max 1200px
+
+Content max-width is 1200 pixels. Beyond that the page centres rather than
+stretching, because a browse grid at 1800 pixels wide produces cards so far apart
+that scanning becomes eye movement rather than peripheral recognition.
+
+------------------------------------------------------------------------------
+5.3 Elevation
+------------------------------------------------------------------------------
+
+Four levels, used sparingly. Shadows in this design indicate interactive layers,
+not decoration.
+
+  --e-0   none                                        Page surfaces
+  --e-1   0 1px 2px rgba(20,24,28,0.06)               Cards at rest
+  --e-2   0 2px 8px rgba(20,24,28,0.09)               Cards on hover
+  --e-3   0 8px 24px rgba(20,24,28,0.14)              Modals, sheets
+  --e-4   0 16px 40px rgba(20,24,28,0.18)             Toasts
+
+------------------------------------------------------------------------------
+5.4 Corner Radii
+------------------------------------------------------------------------------
+
+  --r-sm   4px    Badges, swatches, small chips
+  --r-md   8px    Inputs, buttons
+  --r-lg   12px   Cards
+  --r-xl   16px   Modals and sheets
+  --r-full 999px  Pills and avatar circles
+
+================================================================================
+6. COMPONENT LIBRARY
+================================================================================
+
+------------------------------------------------------------------------------
+6.1 Button
+------------------------------------------------------------------------------
+
+  Variants:  primary | secondary | ghost | danger
+  Sizes:     lg (48px) | md (40px) | sm (32px)
+
+  Primary:    --brand-600 background, white text, --r-md
+  Secondary:  --ink-000 background, --ink-300 border, --ink-900 text
+  Ghost:      transparent, --brand-600 text, underline on hover
+  Danger:     --err-600 background, white text
+
+  States:
+    default   as specified
+    hover     background darkens one step, --e-2 on raised variants
+    active    background darkens two steps, transform: translateY(1px)
+    focus     3px --brand-100 ring, offset 2px, never removed
+    disabled  40% opacity, cursor not-allowed, no hover response
+    loading   label replaced by a spinner, width preserved so the button
+              does not resize and shift the layout beneath it
+
+  The preserved width during loading is a small detail with a real effect: a
+  button that shrinks when clicked moves everything below it, and on a phone
+  that can move the next control under the user's thumb mid-tap.
+
+  Minimum tap target is 44×44 pixels regardless of the visual size, achieved
+  with padding rather than with dimensions where the visual button is smaller.
+
+------------------------------------------------------------------------------
+6.2 Text Input and Textarea
+------------------------------------------------------------------------------
+
+  Structure:  Label (above, always visible)
+              Input
+              Helper text or error message (below, reserved space)
+
+  Height:     44px for single-line
+  Border:     1px --ink-300, --r-md
+  Focus:      border --brand-600, 3px --brand-100 ring
+  Error:      border --err-600, message in --err-600 at --t-small
+  Disabled:   --ink-100 background
+
+Labels sit above the field and remain visible. Placeholder-as-label was rejected
+outright: the label vanishes when the user starts typing, which means anyone
+interrupted mid-form must clear the field to remember what it was for. This is a
+well-documented usability failure and it appears in a great many student
+projects.
+
+Helper text occupies reserved vertical space whether or not a message is
+present, so that the appearance of an error does not shift the layout.
+
+------------------------------------------------------------------------------
+6.3 Select and Searchable Select
+------------------------------------------------------------------------------
+
+Plain select for lists under about a dozen options: categories, colours,
+custody.
+
+Searchable select for locations, which number around eighty. Behaviour:
+
+  - Click opens a panel with a text filter focused
+  - Typing filters, matching on location name and building
+  - Options grouped by building with sticky group headers
+  - Arrow keys move, Enter selects, Escape closes
+  - The selected value displays as "Reading Hall — Central Library"
+
+The grouping by building is what makes eighty options navigable. Ungrouped, the
+list is a wall; grouped, the user finds their building in one glance and then
+picks within five options.
+
+------------------------------------------------------------------------------
+6.4 Colour Swatch Selector
+------------------------------------------------------------------------------
+
+A wrapping row of circular swatches, 36 pixels, each with its colour name
+beneath at --t-micro.
+
+  default   1px --ink-300 border
+  selected  3px --brand-600 ring plus a check mark, in white or ink depending
+            on the swatch's luminance
+  focus     3px --brand-100 ring
+
+The check mark is essential. A selected swatch indicated only by a ring is
+ambiguous at a glance and invisible to anyone with a colour vision deficiency
+when the ring colour and the swatch colour are close.
+
+------------------------------------------------------------------------------
+6.5 Item Card
+------------------------------------------------------------------------------
+
+The most-used component in the product.
+
+  ┌────────────────────────────────────────────┐
+  │ ●white   AirPods                       [›] │   ← swatch, name, chevron
+  │          Electronics · Apple               │   ← category · brand
+  │          Central Library · 11 Sep          │   ← where · when
+  │          ┌──────────────┐                  │
+  │          │ 3 days here  │                  │   ← age chip
+  │          └──────────────┘                  │
+  └────────────────────────────────────────────┘
+
+  Padding:     --s-4 mobile, --s-5 desktop
+  Radius:      --r-lg
+  Border:      1px --ink-200
+  Shadow:      --e-1 at rest, --e-2 on hover
+  Hover:       border --ink-300, translateY(-1px)
+  Whole card is the click target, not just the title
+
+The age chip earns its place by creating gentle urgency. An item that has been
+waiting eleven days is more likely to be looked at carefully than one with no
+temporal context.
+
+------------------------------------------------------------------------------
+6.6 Match Card
+------------------------------------------------------------------------------
+
+The single most important component in the product, and the only place the
+design is permitted to be emphatic.
+
+  ┌──────────────────────────────────────────────────┐
+  │  ┌────┐                                          │
+  │  │ 98 │  STRONG MATCH                            │
+  │  └────┘                                          │
+  │  ─────────────────────────────────────────────── │
+  │  YOUR REPORT              THE FOUND ITEM         │
+  │  AirPods Pro              AirPods                │
+  │  Central Library          Central Library        │
+  │  10 September             11 September           │
+  │  ─────────────────────────────────────────────── │
+  │  ✓ Same category (Electronics)            +20    │
+  │  ✓ Same brand (Apple)                     +20    │
+  │  ✓ Same location (Central Library)        +20    │
+  │  ✓ Same colour (White)                    +15    │
+  │  ✓ Found 1 day after you lost it          +13    │
+  │  ✓ Shared keywords: black, case           +10    │
+  │  ─────────────────────────────────────────────── │
+  │  [ This is mine ]              [ Not mine ]      │
+  └──────────────────────────────────────────────────┘
+
+  Score badge:  56×56, --r-md, --brand-600 background, white, --t-h1,
+                tabular numerals
+  Band label:   --t-micro, uppercase, 0.06em letter-spacing
+  Card border:  2px --brand-100 for STRONG, 1px --ink-200 otherwise
+  Reason rows:  checkmark icon, label left, points right-aligned, tabular
+
+Two design rules govern this component and both are non-negotiable.
+
+First, the reason points are right-aligned in a column with tabular numerals so
+that the user can visually add them and arrive at the badge number. The interface
+is inviting the user to check its arithmetic, and it must therefore make the
+arithmetic checkable.
+
+Second, the points displayed are the points stored in matches.reason_json. The
+client performs no computation. If a weight is retuned next term, a match scored
+under the old weights still displays the breakdown that produced its score.
+
+------------------------------------------------------------------------------
+6.7 Status Badge
+------------------------------------------------------------------------------
+
+  Height 22px, padding 0 8px, --r-full, --t-micro uppercase,
+  600 weight, 0.04em letter-spacing.
+  Background: semantic -100 token. Text: semantic -600 token.
+  A 6px dot precedes the label: outlined for in-progress states, filled for
+  terminal states.
+
+------------------------------------------------------------------------------
+6.8 Timeline
+------------------------------------------------------------------------------
+
+  ●───  10 Sep, 18:42   Report created                Ananya
+  │                     Status set to Open
+  │
+  ●───  11 Sep, 09:15   Match suggested               System
+  │                     Match #302 · score 98 · Strong
+  │
+  ●───  11 Sep, 14:20   Claim approved                Rahul
+  │                     Open → Matched
+  │
+  ●───  12 Sep, 10:07   Item collected                Ananya
+                        Matched → Resolved
+
+  Rail:   2px --ink-200 vertical line
+  Node:   10px circle, semantic colour matching the resulting status,
+          white 2px ring so it reads as sitting on the rail
+  Last node is filled and slightly larger
+
+The status transition is rendered as "Open → Matched" rather than as two
+separate values, because the arrow is what makes it a history rather than a list
+of facts.
+
+------------------------------------------------------------------------------
+6.9 Empty State
+------------------------------------------------------------------------------
+
+  Structure:  Illustration or icon, 64px, --ink-300
+              Headline, --t-h3, --ink-900
+              Explanation, --t-body, --ink-700, max 42 characters per line
+              Primary action
+              Optional secondary action
+
+  Vertical centring within the available region, max-width 400px.
+
+Every empty state names a cause and offers an action. "No results" alone is
+banned by review.
+
+------------------------------------------------------------------------------
+6.10 Modal and Bottom Sheet
+------------------------------------------------------------------------------
+
+Desktop: centred modal, max-width 480px, --r-xl, --e-3, scrim
+rgba(20,24,28,0.45).
+Mobile: bottom sheet, full width, top corners --r-xl, drag handle, slides up.
+
+Behaviour: focus trapped within, Escape closes, scrim click closes for
+non-destructive modals only, focus returns to the triggering element on close,
+background scroll locked.
+
+Destructive confirmations do not close on scrim click, because an accidental
+tap outside a confirmation should not dismiss it in either direction.
+
+------------------------------------------------------------------------------
+6.11 Toast
+------------------------------------------------------------------------------
+
+Bottom-centre on mobile, bottom-right on desktop. Auto-dismiss after four
+seconds, or six seconds when an undo action is present. Maximum two stacked;
+further toasts queue. Dismissible manually. Never used for errors that require a
+decision — those are inline or modal, because a toast that disappears takes its
+information with it.
+
+------------------------------------------------------------------------------
+6.12 Skeleton Loader
+------------------------------------------------------------------------------
+
+Shapes match the content that will replace them: a card skeleton has a swatch
+circle, three text bars of decreasing width, and a chip. A shimmer sweeps at
+1.4s. Skeletons appear only after 300 milliseconds of waiting, so a fast response
+never flashes one.
+
+================================================================================
+7. SCREEN DESIGNS — WIREFRAMES AND SPECIFICATIONS
+================================================================================
+
+------------------------------------------------------------------------------
+7.1 S01 — Landing (mobile)
+------------------------------------------------------------------------------
+
+  ┌─────────────────────────────┐
+  │  FoundIt                    │
+  │                             │
+  │  Lost something on campus?  │   --t-display
+  │  Report it. We will watch   │   --t-body, --ink-700
+  │  for it.                    │
+  │                             │
+  │  ┌───────────────────────┐  │
+  │  │  I lost something     │  │   primary, lg, full width
+  │  └───────────────────────┘  │
+  │  ┌───────────────────────┐  │
+  │  │  I found something    │  │   secondary, lg, full width
+  │  └───────────────────────┘  │
+  │                             │
+  │  148 items listed now       │   --t-small, --ink-500
+  │  37 returned this month     │
+  │                             │
+  │  RECENTLY FOUND             │   --t-micro, uppercase
+  │  ┌─────┐ ┌─────┐ ┌─────┐    │   horizontal scroll strip
+  │  │ ●   │ │ ●   │ │ ●   │    │
+  │  │Bottle││Calc ││Keys │    │
+  │  └─────┘ └─────┘ └─────┘    │
+  │                             │
+  │  Already have an account?   │
+  │  Sign in                    │   ghost
+  └─────────────────────────────┘
+
+The counters and the recent strip are load-bearing. They are the evidence that
+the system is alive, and they are the direct design response to the cold-start
+risk identified in the PRD.
+
+------------------------------------------------------------------------------
+7.2 S06 — Report Lost (mobile)
+------------------------------------------------------------------------------
+
+  ┌─────────────────────────────┐
+  │  ‹ Back        Report lost   │
+  ├─────────────────────────────┤
+  │                             │
+  │  What did you lose?         │
+  │  ┌───────────────────────┐  │
+  │  │ AirPods               │  │
+  │  └───────────────────────┘  │
+  │                             │
+  │  Category                   │
+  │  ┌───────────────────────┐  │
+  │  │ Electronics        ▾  │  │  ← auto-selected from item name
+  │  └───────────────────────┘  │
+  │  Chosen from what you typed │  --t-small, --ink-500
+  │                             │
+  │  Where?                     │
+  │  ┌───────────────────────┐  │
+  │  │ 🔍 Central Library ▾  │  │
+  │  └───────────────────────┘  │
+  │                             │
+  │  When?                      │
+  │  ┌───────────────────────┐  │
+  │  │ 10 September 2026     │  │
+  │  └───────────────────────┘  │
+  │                             │
+  │  Colour        (optional)   │
+  │  ● ● ● ● ● ● ● ●            │  ← swatch row, wrapping
+  │  Wh Bk Gy Bl Rd Gn Yl Or    │
+  │                             │
+  │  Brand         (optional)   │
+  │  ┌───────────────────────┐  │
+  │  │ Apple              ▾  │  │
+  │  └───────────────────────┘  │
+  │                             │
+  │  Anything distinctive?      │
+  │  ┌───────────────────────┐  │
+  │  │ A scratch, a sticker, │  │  ← placeholder
+  │  │ what was inside...    │  │
+  │  └───────────────────────┘  │
+  │  0 / 300                    │
+  │                             │
+  │  ┌───────────────────────┐  │
+  │  │      Submit report     │  │  primary, lg, sticky at bottom
+  │  └───────────────────────┘  │
+  └─────────────────────────────┘
+
+Design notes. The category auto-selection with its explanatory line is the
+single largest time saving in the form and the one users comment on. Optional
+fields are labelled "(optional)" explicitly rather than by the absence of an
+asterisk, because absence is not a signal people read. The submit button is
+sticky so it is reachable without scrolling to the bottom on a small screen.
+
+------------------------------------------------------------------------------
+7.3 S07 — Report Found, the Two Description Fields
+------------------------------------------------------------------------------
+
+  │  What will help the owner   │
+  │  recognise it?  (optional)  │
+  │  ┌───────────────────────┐  │
+  │  │ White earphones in a  │  │
+  │  │ black case            │  │
+  │  └───────────────────────┘  │
+  │  👁 Shown publicly          │  --t-small, --ink-500
+  │                             │
+  │  ┌─────────────────────────┐│
+  │  │ 🔒 PRIVATE              ││  ← distinct container,
+  │  │                         ││    --warn-100 background,
+  │  │ What detail would only  ││    --warn-600 left border 3px
+  │  │ the owner know?         ││
+  │  │ ┌─────────────────────┐ ││
+  │  │ │ Small blue sticker  │ ││
+  │  │ │ inside the lid      │ ││
+  │  │ └─────────────────────┘ ││
+  │  │ Never shown to anyone.  ││
+  │  │ We use it to check that ││
+  │  │ a claimant really owns  ││
+  │  │ the item.               ││
+  │  └─────────────────────────┘│
+
+The private field is the only element in the entire product that gets its own
+tinted container. That visual exception is deliberate and proportionate: it is
+the field on which the whole verification mechanism depends, and it is the field
+users are most likely to misunderstand.
+
+------------------------------------------------------------------------------
+7.4 S09 — Browse (desktop)
+------------------------------------------------------------------------------
+
+  ┌────────────────────────────────────────────────────────────┐
+  │  FoundIt    Home  Browse  [+ Report]  My items    Profile  │
+  ├──────────────┬─────────────────────────────────────────────┤
+  │ FILTERS      │  Found items                    148 items   │
+  │              │  ┌──────────┐ ┌──────────┐ ┌──────────┐     │
+  │ Search       │  │● AirPods │ │● Bottle  │ │● Calc    │     │
+  │ ┌──────────┐ │  │ Electr.  │ │ Bottle   │ │ Electr.  │     │
+  │ │🔍        │ │  │ Library  │ │ Mess A   │ │ AB-2     │     │
+  │ └──────────┘ │  │ 11 Sep   │ │ 10 Sep   │ │ 09 Sep   │     │
+  │              │  │ 3 days   │ │ 4 days   │ │ 5 days   │     │
+  │ Category     │  └──────────┘ └──────────┘ └──────────┘     │
+  │ ☑ Electronics│  ┌──────────┐ ┌──────────┐ ┌──────────┐     │
+  │ ☐ Books      │  │          │ │          │ │          │     │
+  │ ☐ Bottles    │  └──────────┘ └──────────┘ └──────────┘     │
+  │ ☐ Keys       │                                             │
+  │              │             ┌─────────────┐                 │
+  │ Building     │             │  Load more  │                 │
+  │ ☐ Library    │             └─────────────┘                 │
+  │ ☐ AB-1       │                                             │
+  │              │                                             │
+  │ Colour       │                                             │
+  │ ● ● ● ● ●    │                                             │
+  │              │                                             │
+  │ Found within │                                             │
+  │ ○ 7 days     │                                             │
+  │ ● 30 days    │                                             │
+  │ ○ 90 days    │                                             │
+  │              │                                             │
+  │ Clear all    │                                             │
+  └──────────────┴─────────────────────────────────────────────┘
+
+Filters apply immediately on change with no Apply button. The active filter count
+appears in the section header, and an active filter set renders as removable
+chips above the grid so the user can see and undo their own narrowing. The item
+count updates live, which is the fastest way to communicate that a filter did
+something.
+
+------------------------------------------------------------------------------
+7.5 S19 — Verification (mobile)
+------------------------------------------------------------------------------
+
+  ┌─────────────────────────────┐
+  │  ‹            Verify claim   │
+  ├─────────────────────────────┤
+  │                             │
+  │  Is this their item?        │  --t-h1
+  │                             │
+  │  AirPods                    │  --t-h3
+  │  Found 11 Sep, Library      │  --t-small, --ink-500
+  │                             │
+  │  ┌─────────────────────────┐│
+  │  │ YOU SAID                ││  --t-micro, --ink-500
+  │  │                         ││
+  │  │ Small blue sticker      ││  --t-body
+  │  │ inside the lid          ││
+  │  └─────────────────────────┘│  --ink-100 background
+  │                             │
+  │  ┌─────────────────────────┐│
+  │  │ THEY SAID               ││
+  │  │                         ││
+  │  │ There's a small blue    ││
+  │  │ sticker inside the lid, ││
+  │  │ and the case is         ││
+  │  │ scratched near the hinge││
+  │  └─────────────────────────┘│  --brand-050 background
+  │                             │
+  │  ┌───────────────────────┐  │
+  │  │   Yes, it is theirs    │  │  primary, lg
+  │  └───────────────────────┘  │
+  │  ┌───────────────────────┐  │
+  │  │   No, it is not        │  │  secondary, lg
+  │  └───────────────────────┘  │
+  │                             │
+  │  Not sure? Ask the Security │  ghost
+  │  Desk to decide             │
+  └─────────────────────────────┘
+
+The two quoted blocks are differently tinted so the verifier never confuses
+whose words are whose, which is the only way this screen can go wrong. The
+escalation link is present but visually quiet, so it is available without being
+the path of least resistance.
+
+------------------------------------------------------------------------------
+7.6 S04 — Dashboard (populated)
+------------------------------------------------------------------------------
+
+  ┌─────────────────────────────┐
+  │  Hello, Ananya              │
+  │                             │
+  │  ┌─────────────────────────┐│
+  │  │ 🔔 1 strong match       ││  --brand-100 background,
+  │  │    on your AirPods      ││  --brand-600 left border
+  │  │    [ See it ]           ││
+  │  └─────────────────────────┘│
+  │                             │
+  │  MY REPORTS            (2)  │
+  │  ┌─────────────────────────┐│
+  │  │ ● AirPods        OPEN   ││
+  │  │   Lost 10 Sep · Library ││
+  │  │   1 strong, 2 possible  ││
+  │  └─────────────────────────┘│
+  │  ┌─────────────────────────┐│
+  │  │ ● Notebook       OPEN   ││
+  │  │   Lost 02 Sep · AB-1    ││
+  │  │   No matches yet        ││
+  │  └─────────────────────────┘│
+  │                             │
+  │  AWAITING YOU          (1)  │
+  │  ┌─────────────────────────┐│
+  │  │ Someone claimed the     ││
+  │  │ water bottle you found  ││
+  │  │ [ Check it ]            ││
+  │  └─────────────────────────┘│
+  └─────────────────────────────┘
+
+The dashboard is strictly ordered by what needs the user's attention: alerts
+first, then reports with activity, then reports without, then verification work.
+A dashboard ordered by creation date would bury the one thing the user opened the
+app to see.
+
+================================================================================
+8. INTERACTION DESIGN
+================================================================================
+
+------------------------------------------------------------------------------
+8.1 Form Interaction
+------------------------------------------------------------------------------
+
+Validation timing. Required-field validation fires on blur, never on keystroke —
+validating as someone types tells them their half-entered email is invalid, which
+is both true and useless. Format validation fires on blur. Cross-field validation
+fires on submit. Once a field has shown an error, it revalidates on change, so
+the user sees the error clear as soon as they fix it.
+
+Error summary. On a failed submit, the page scrolls to the first invalid field
+and focuses it. A summary at the top lists every error as a link. This matters on
+a long form where the invalid field may be off-screen.
+
+Autosave. The two report forms mirror their state to session storage on every
+change, debounced at 500 milliseconds. An accidental refresh or a back-navigation
+restores the draft, with a dismissible banner: "We restored your draft."
+
+Draft expiry. Session storage entries carry a timestamp and are discarded after
+24 hours, so an abandoned draft does not pre-fill an unrelated report a week
+later.
+
+------------------------------------------------------------------------------
+8.2 Smart Defaults
+------------------------------------------------------------------------------
+
+Date defaults to today, which is correct for the overwhelming majority of
+reports.
+
+Category is inferred from the item name by a keyword map held client-side:
+"airpod|earphone|earbud|headphone" → Electronics, "bottle|flask" → Water Bottle,
+"id|card" → Identity Document, and so on. The inference is always overridable
+and is annotated with the "Chosen from what you typed" helper line so the user
+understands where the selection came from and does not feel the form is
+guessing at them.
+
+Location remembers the last value used by this user in this session, which helps
+the staff console enormously and helps students slightly.
+
+Colour and brand are never pre-selected, because a wrong pre-selection on an
+optional field is worse than an empty one: it introduces false data into the
+match score.
+
+------------------------------------------------------------------------------
+8.3 Progressive Disclosure
+------------------------------------------------------------------------------
+
+The storage-location field on S07 appears only when custody is not "I still have
+it". The free-text brand field appears only when brand is "Other". The custom
+date range on S09 appears only when the custom radio is selected. Weak matches
+on S13 are collapsed behind a labelled control with a count.
+
+In every case the hidden content is genuinely conditional. Progressive
+disclosure applied to fields that are always relevant just hides things.
+
+------------------------------------------------------------------------------
+8.4 Feedback Latency
+------------------------------------------------------------------------------
+
+  Under 100ms     Feels instantaneous. No feedback needed.
+  100–300ms       Perceptible. Button enters pressed state only.
+  300ms–1s        Skeleton or inline spinner.
+  1s–3s           Skeleton plus a message naming what is happening.
+  Over 3s         Progress indication and, where possible, partial results.
+
+The claim approval action sits in the 300ms–1s band and shows a button spinner.
+The report submission sits in the same band but transitions to a new screen, so
+the transition itself is the feedback.
+
+------------------------------------------------------------------------------
+8.5 Undo
+------------------------------------------------------------------------------
+
+Match dismissal is the only undoable action, offered for ten seconds via a toast.
+Everything else that is destructive is confirmed instead.
+
+The rule applied: an action is undoable if it is easy to trigger accidentally and
+its consequence is invisible. Dismissing a match on a phone qualifies on both
+counts. Approving a claim does not — it is hard to trigger accidentally because
+it is confirmed, and its consequence is highly visible to two people.
+
+================================================================================
+9. MOTION AND TRANSITIONS
+================================================================================
+
+------------------------------------------------------------------------------
+9.1 Durations and Easing
+------------------------------------------------------------------------------
+
+  --motion-fast    120ms   Hover, focus, small state changes
+  --motion-base    200ms   Most transitions
+  --motion-slow    320ms   Modals, sheets, route changes
+
+  --ease-out       cubic-bezier(0.16, 1, 0.3, 1)      entering
+  --ease-in        cubic-bezier(0.7, 0, 0.84, 0)      exiting
+  --ease-in-out    cubic-bezier(0.65, 0, 0.35, 1)     moving
+
+Entering elements use ease-out, which starts fast and settles, so content feels
+like it arrives. Exiting elements use ease-in, which accelerates away, so
+dismissal feels decisive.
+
+------------------------------------------------------------------------------
+9.2 Specific Motions
+------------------------------------------------------------------------------
+
+  Page transition       Opacity 0→1 over 200ms with a 6px upward translate.
+                        No horizontal slide, which reads as navigation
+                        direction and is wrong for a shallow app.
+  Modal enter           Scrim fades 200ms; dialog scales 0.96→1 with opacity
+                        over 200ms ease-out.
+  Bottom sheet          Translates from 100% to 0 over 320ms ease-out.
+  Card hover            translateY(-1px) and shadow e-1→e-2 over 120ms.
+  Skeleton shimmer      1.4s linear infinite.
+  Toast                 Slides 12px up with opacity over 200ms.
+  Match card reveal     On the confirmation screen, the strong-match card
+                        fades and scales in over 320ms with a 120ms delay.
+                        This is the one piece of deliberately expressive
+                        motion in the product, and it exists because that
+                        moment is the product's payoff.
+  Dismiss               Card scales to 0.96 and fades over 200ms, then the
+                        list reflows over 200ms.
+
+------------------------------------------------------------------------------
+9.3 Reduced Motion
+------------------------------------------------------------------------------
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+
+Opacity transitions are retained at a shortened duration, because an instant
+appearance is more jarring than a fast fade. Transforms and scale effects are
+removed entirely, since those are what trigger vestibular discomfort.
+
+================================================================================
+10. RESPONSIVE DESIGN
+================================================================================
+
+------------------------------------------------------------------------------
+10.1 Approach
+------------------------------------------------------------------------------
+
+Mobile-first. Base styles target the smallest viewport and min-width media
+queries add capability. This ordering matters more than it sounds: designing
+desktop-first and subtracting produces mobile screens that are compromises,
+whereas designing mobile-first and adding produces desktop screens that are
+enhancements.
+
+The expected traffic split is heavily mobile. A student reports a loss from
+wherever they realised it, which is almost never at a desk.
+
+------------------------------------------------------------------------------
+10.2 Per-Screen Adaptation
+------------------------------------------------------------------------------
+
+  Screen   Mobile                       Desktop
+  -------  ---------------------------  ---------------------------------
+  S01      Stacked, full-width actions  Two-column hero with the recent
+                                        strip beside the actions
+  S04      Single column cards          Two columns: reports left,
+                                        attention items right
+  S06/S07  Single column, sticky        Two columns for short fields,
+           submit                       full width for textareas
+  S09      1-col grid, filter sheet     3-col grid, persistent filter rail
+  S13      Stacked cards                2-col card grid
+  S14      Panels stacked, yours first  Side-by-side panels
+  S19      Full width, stacked quotes   Centred, max 560px, quotes stacked
+  S22–S27  Card lists                   Tables
+
+The S14 stacking order on mobile — the user's own report first, then the found
+item — is deliberate. The user needs to re-anchor on what they lost before
+evaluating what was found.
+
+Tables becoming card lists on mobile rather than scrolling horizontally is the
+single most important responsive decision in the staff and admin sections. A
+horizontally scrolling table on a phone is technically responsive and practically
+unusable.
+
+------------------------------------------------------------------------------
+10.3 Touch Considerations
+------------------------------------------------------------------------------
+
+Minimum tap target 44×44 pixels with at least 8 pixels between adjacent targets.
+Primary actions positioned within thumb reach in the lower two-thirds of the
+screen. Destructive actions positioned away from primary ones, never adjacent.
+No hover-dependent information anywhere, since hover does not exist on touch —
+the "see all reasons" affordance is a tap, not a hover.
+
+================================================================================
+11. ACCESSIBILITY
+================================================================================
+
+------------------------------------------------------------------------------
+11.1 Target
+------------------------------------------------------------------------------
+
+WCAG 2.1 Level AA.
+
+------------------------------------------------------------------------------
+11.2 Colour and Contrast
+------------------------------------------------------------------------------
+
+  --ink-900 on --ink-000    15.8:1   ✓ AAA
+  --ink-700 on --ink-000     9.1:1   ✓ AAA
+  --ink-500 on --ink-000     4.6:1   ✓ AA
+  white on --brand-600       6.4:1   ✓ AA
+  --err-600 on --err-100     6.0:1   ✓ AA
+  --ok-600 on --ok-100       5.4:1   ✓ AA
+
+Non-text contrast: all input borders, focus rings and swatch outlines meet 3:1
+against their adjacent colours.
+
+Colour is never the only carrier of meaning. Status badges carry a word and a
+dot shape. Match bands carry a numeral and a label. Item colours carry a name.
+Validation errors carry an icon and a message.
+
+------------------------------------------------------------------------------
+11.3 Keyboard
+------------------------------------------------------------------------------
+
+Every interactive element is reachable by Tab in a logical order matching the
+visual order. Focus is never removed, only restyled. A skip-to-content link is
+the first focusable element on every page.
+
+Modals trap focus and restore it on close. The searchable select supports arrow
+navigation, Enter to select, Escape to close, and Home/End to jump. The swatch
+selector is a radio group navigable with arrows.
+
+Escape closes any overlay. Enter submits any form from any field except a
+textarea.
+
+------------------------------------------------------------------------------
+11.4 Screen Readers
+------------------------------------------------------------------------------
+
+Semantic HTML first: nav, main, section, h1 through h3 in order without skipping
+levels, button for actions, a for navigation. ARIA is used only where semantics
+are insufficient.
+
+  - Every input has an associated label element, not a placeholder or an
+    aria-label where a visible label exists
+  - Error messages are linked with aria-describedby and the field carries
+    aria-invalid
+  - The item count region on browse is aria-live="polite" so filter changes
+    are announced
+  - Toasts are role="status" for informational and role="alert" for errors
+  - The match score is announced as "Match score 98 out of 100, strong match"
+    via an aria-label on the badge, since "98" alone is meaningless
+  - Skeletons are aria-hidden with an aria-live region announcing "Loading"
+  - Icon-only controls carry an aria-label; the chevron on cards is
+    aria-hidden because the card itself is the labelled control
+
+------------------------------------------------------------------------------
+11.5 Content Accessibility
+------------------------------------------------------------------------------
+
+Reading level targeted at a general audience, not a technical one. Sentences
+average under 20 words. Error messages state the correction, not the failure.
+Link text is meaningful out of context: "See the match" rather than "Click
+here".
+
+================================================================================
+12. CONTENT AND VOICE
+================================================================================
+
+------------------------------------------------------------------------------
+12.1 Voice
+------------------------------------------------------------------------------
+
+Plain, direct, warm without being chirpy. The product is helping with a small
+frustration, not celebrating a triumph. Exclamation marks are reserved for the
+single success moment at handover completion, and even there they are optional.
+
+Second person for the user, first person plural for the system: "We will check
+every item found from now on." The first person plural is a deliberate choice —
+it makes the system an agent doing work on the user's behalf, which is exactly
+the standing-query model the product needs the user to internalise.
+
+------------------------------------------------------------------------------
+12.2 Vocabulary Standards
+------------------------------------------------------------------------------
+
+  Use                      Not
+  -----------------------  ----------------------------------
+  report                   listing, post, entry, record
+  match                    result, hit, suggestion, candidate
+  claim                    request, application
+  found item               item, product, article
+  the finder               the reporter, the user
+  Security Desk            security, the desk, lost property
+
+Consistency here is not pedantry. A user who reads "report" on one screen and
+"listing" on the next has to work out whether they are the same thing.
+
+------------------------------------------------------------------------------
+12.3 Message Patterns
+------------------------------------------------------------------------------
+
+  Success      What happened, then what is next.
+               "Your report is live. We will check every item found from now
+                on against your description."
+
+  Error        What happened, then how to fix it.
+               "That date is in the future. Choose a date on or before today."
+
+  Empty        Why it is empty, then what would change it.
+               "No items match these filters. Try widening the date range."
+
+  Confirm      What will happen, then whether it can be undone.
+               "Withdraw this report? It will stop matching against new
+                finds. You can file a new report later."
+
+------------------------------------------------------------------------------
+12.4 The Messages That Matter Most
+------------------------------------------------------------------------------
+
+Three strings carry disproportionate weight and are worth writing and rewriting.
+
+The no-match confirmation, because it determines retention:
+  "Your report is live. Nothing matching has been found yet. From now on,
+   every item anyone reports finding will be checked against your description
+   automatically. We will tell you the moment something matches."
+
+The private field explanation, because it determines whether verification works:
+  "Never shown to anyone. We use it to check that a claimant really owns the
+   item."
+
+The concurrency conflict, because it must not read as a bug:
+  "Someone else's claim on this item was approved a moment ago. Nothing has
+   changed here."
+
+================================================================================
+13. ICONOGRAPHY AND IMAGERY
+================================================================================
+
+------------------------------------------------------------------------------
+13.1 Icons
+------------------------------------------------------------------------------
+
+A single open-source outline set, 1.5px stroke, 24px default grid, rendered at
+16, 20 and 24 pixels. Icons are never the sole label on a control that a novice
+must understand; a bare icon is acceptable only for universally understood
+actions such as close and back.
+
+  Category icons: earphone, laptop, book, bag, wallet, card, key, bottle,
+                  shirt, umbrella, glasses, ball, flask, box (fallback)
+  Action icons:   plus, search, filter, close, chevron, check, alert, clock,
+                  lock, eye, undo, arrow-right
+
+Category icons appear on browse cards and in the category selector. Their
+purpose is to accelerate scanning, so the set is drawn at one weight with
+consistent visual mass; a set mixing filled and outline styles defeats the
+purpose.
+
+------------------------------------------------------------------------------
+13.2 Imagery Policy
+------------------------------------------------------------------------------
+
+No photographs in version 1.0. The MVP has no image upload, and stock imagery
+would add page weight for no informational value.
+
+The colour swatch is the visual identity of an item. This is a constraint turned
+into a feature: a wall of coloured dots is scannable in a way that a wall of
+identical placeholder thumbnails would not be.
+
+When image upload arrives as a post-MVP enhancement, the design rules are
+already set: 4:3 aspect, object-fit cover, maximum three per item, a blurred
+low-quality placeholder while loading, and no images at all for sensitive
+categories.
+
+------------------------------------------------------------------------------
+13.3 Illustration
+------------------------------------------------------------------------------
+
+Empty states use a single-line illustration at 64 pixels in --ink-300 — a
+magnifying glass for no results, an open box for no items, a check for nothing
+pending. Monochrome and small, so they read as punctuation rather than as
+decoration.
+
+================================================================================
+14. DESIGN TOKENS REFERENCE
+================================================================================
+
+:root {
+  /* Brand */
+  --brand-700: #12405C;  --brand-600: #14568A;  --brand-500: #1C6FB0;
+  --brand-100: #DCEBF7;  --brand-050: #F1F7FC;
+
+  /* Accent */
+  --accent-600: #B4520A; --accent-100: #FBE9D8;
+
+  /* Neutrals */
+  --ink-900: #14181C;    --ink-700: #3A444E;    --ink-500: #6B7883;
+  --ink-300: #B8C1C9;    --ink-200: #DCE2E7;    --ink-100: #F0F3F5;
+  --ink-000: #FFFFFF;
+
+  /* Semantic */
+  --ok-600: #1D7A4C;     --ok-100: #DDF2E7;
+  --warn-600: #9A6B06;   --warn-100: #FBF0D5;
+  --err-600: #A8301F;    --err-100: #FBE2DE;
+  --info-600: #14568A;   --info-100: #DCEBF7;
+
+  /* Type */
+  --t-display: 32px/38px; --t-h1: 26px/32px;   --t-h2: 20px/28px;
+  --t-h3: 17px/24px;      --t-body: 15px/23px; --t-small: 13px/19px;
+  --t-micro: 11px/16px;
+
+  /* Space */
+  --s-1: 4px;  --s-2: 8px;  --s-3: 12px; --s-4: 16px;
+  --s-5: 24px; --s-6: 32px; --s-7: 48px; --s-8: 64px;
+
+  /* Radius */
+  --r-sm: 4px; --r-md: 8px; --r-lg: 12px; --r-xl: 16px; --r-full: 999px;
+
+  /* Elevation */
+  --e-1: 0 1px 2px rgba(20,24,28,.06);
+  --e-2: 0 2px 8px rgba(20,24,28,.09);
+  --e-3: 0 8px 24px rgba(20,24,28,.14);
+  --e-4: 0 16px 40px rgba(20,24,28,.18);
+
+  /* Motion */
+  --motion-fast: 120ms; --motion-base: 200ms; --motion-slow: 320ms;
+  --ease-out: cubic-bezier(.16,1,.3,1);
+  --ease-in: cubic-bezier(.7,0,.84,0);
+  --ease-in-out: cubic-bezier(.65,0,.35,1);
+
+  /* Layout */
+  --content-max: 1200px; --prose-max: 34rem;
+}
+
+Every value in the implementation references a token. A hard-coded hex value or
+pixel measurement in a component stylesheet is a review-blocking defect, because
+it is the mechanism by which a design system stops being a system.
+
+================================================================================
+15. DESIGN REVIEW CHECKLIST
+================================================================================
+
+Applied to every screen before it is considered complete.
+
+  Layout
+  [ ] Works at 360px with no horizontal scroll
+  [ ] Works at 1440px without content stretching past 1200px
+  [ ] Spacing uses only scale tokens
+  [ ] Text measure is under 68 characters
+
+  Colour and type
+  [ ] All colours are tokens; no hard-coded hex
+  [ ] All type sizes are scale steps
+  [ ] Contrast checked and recorded for every text/background pair
+  [ ] No meaning carried by colour alone
+
+  States
+  [ ] Empty state designed, with a cause and an action
+  [ ] Loading state designed, matching the content's shape
+  [ ] Error state designed, naming the correction
+  [ ] Every interactive element has hover, active, focus and disabled
+
+  Interaction
+  [ ] Tap targets at least 44×44 with 8px separation
+  [ ] Destructive actions confirmed
+  [ ] Focus ring present and visible on every focusable element
+  [ ] Keyboard path through the screen tested end to end
+
+  Accessibility
+  [ ] Heading levels sequential, no skips
+  [ ] Every input has a visible associated label
+  [ ] Errors linked with aria-describedby, fields marked aria-invalid
+  [ ] Dynamic regions announced with aria-live
+  [ ] Tested with the keyboard only
+  [ ] Tested with a screen reader on at least the two core journeys
+
+  Content
+  [ ] Vocabulary matches the standards table
+  [ ] Errors say what to do, not what failed
+  [ ] No database vocabulary anywhere on screen
+  [ ] Success messages state what happens next
+
+  Privacy
+  [ ] No private field rendered anywhere it should not be
+  [ ] Contact details absent before claim approval
+  [ ] Sensitive-category items show building only, never exact location
+
+================================================================================
+END OF DOCUMENT — FI-DFL-001 v1.1
+================================================================================

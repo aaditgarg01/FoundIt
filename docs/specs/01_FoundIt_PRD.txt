@@ -1,0 +1,1995 @@
+================================================================================
+FOUNDIT — SMART CAMPUS LOST & FOUND
+PRODUCT REQUIREMENTS DOCUMENT (PRD)
+================================================================================
+
+Document ID .............. FI-PRD-001
+Version .................. 1.1
+Status ................... Baselined for Implementation
+Date ..................... 18 September 2026
+Author ................... Aadit Garg (25BCE2315)
+Programme ................ B.Tech Computer Science & Engineering, VIT Vellore
+Course Context ........... Database Management Systems — Project Component
+Classification ........... Academic Project Deliverable
+Related Documents ........ FI-TRD-001 (Technical Requirements)
+                           FI-AFL-001 (Application Flow)
+                           FI-DFL-001 (Design Flow)
+                           FI-TFL-001 (Technical Flow)
+                           FI-IMP-001 (Implementation Plan)
+
+================================================================================
+TABLE OF CONTENTS
+================================================================================
+
+1.  Executive Summary
+2.  Problem Statement
+3.  Product Vision and Positioning
+4.  Goals, Non-Goals and Success Criteria
+5.  Stakeholders and User Personas
+6.  Scope Definition
+7.  Functional Requirements
+8.  The Matching Engine — Product Specification
+9.  Proof-of-Ownership and Claim Verification
+10. Non-Functional Requirements
+11. Data Requirements and Entity Overview
+12. Business Rules and Constraints
+13. User Stories with Acceptance Criteria
+14. Reporting and Analytics Requirements
+15. Assumptions, Dependencies and Risks
+16. Release Strategy and Prioritisation
+17. Evaluation Mapping to DBMS Syllabus
+18. Glossary
+19. Open Questions and Change Log
+
+================================================================================
+1. EXECUTIVE SUMMARY
+================================================================================
+
+FoundIt is a database-driven campus lost-and-found system that connects lost
+and found item reports through attribute-based matching, manages ownership
+claims, and maintains an auditable history of item status changes.
+
+That single sentence is the product statement, and every requirement in this
+document exists to serve some part of it. The four load-bearing phrases are
+worth unpacking before anything else, because they determine what is in scope
+and what is deliberately excluded.
+
+"Database-driven" means the intelligence of the system lives in the relational
+schema and in SQL, not in application code and not in an external machine
+learning service. When FoundIt tells a student that their lost AirPods are an
+87% match for a found item reported one day later in the same building, that
+number is produced by a deterministic scoring expression evaluated by the
+database engine against indexed columns. A student can be asked in a viva to
+explain exactly why the score was 87 and not 92, and they can answer by walking
+through the scoring rule. That explainability is a feature, not a limitation.
+
+"Attribute-based matching" means the system compares structured attributes —
+category, brand, colour, location, date proximity — rather than attempting
+semantic or visual understanding. Structured comparison is cheap, indexable,
+deterministic and teachable. It also happens to be sufficient: the vast
+majority of campus losses are commodity objects (earphones, water bottles,
+calculators, ID cards, umbrellas, laptop chargers) where the discriminating
+information really is categorical.
+
+"Manages ownership claims" means the system does not stop at surfacing a match.
+The hardest social problem in any lost-and-found is not finding the item; it is
+deciding who actually owns it. FoundIt models the claim as a first-class entity
+with a verification workflow and a proof-of-ownership challenge, so that
+"that's mine" is a request rather than an assertion.
+
+"Auditable history of item status changes" means every transition of an item
+through the lifecycle OPEN → MATCHED → CLAIMED → RETURNED is recorded in an
+append-only log with actor, timestamp, and before/after state. The current
+state of an item is a projection; the log is the truth.
+
+The system is intended to be built and demonstrated within a single academic
+term by a small team, using a conventional three-tier architecture: a
+relational database (PostgreSQL or MySQL), a server-side application layer
+exposing a REST API, and a thin web client. It is deliberately not a
+microservice architecture, not an AI product, and not a mobile application.
+
+------------------------------------------------------------------------------
+1.1 Why This Problem Was Chosen
+------------------------------------------------------------------------------
+
+A large number of student database projects fail to be database projects. They
+are web applications that happen to persist rows. The distinguishing test is
+simple: if you replaced the relational database with a flat JSON file and the
+application still worked essentially unchanged, it was never a database
+project.
+
+FoundIt fails that test in the right direction. Remove the relational database
+and the matching engine collapses, because matching is a join between two large
+tables under a composite predicate, ranked by a computed score, filtered by a
+threshold, and constrained by referential integrity. Remove transactions and the
+claim workflow becomes unsafe, because two students can claim the same found
+item concurrently and both succeed. Remove indexes and the match query degrades
+from milliseconds to seconds as the dataset grows. Every one of those failures
+is observable, demonstrable, and directly tied to a syllabus module.
+
+------------------------------------------------------------------------------
+1.2 Document Purpose and Audience
+------------------------------------------------------------------------------
+
+This PRD defines what FoundIt must do and why, expressed in terms a
+non-implementer can evaluate. It does not prescribe implementation technique;
+that is the job of the Technical Requirements Document. The intended readers
+are:
+
+  - The development team, who will use it as the authoritative statement of
+    scope and will treat any feature not described here as out of scope until
+    the document is amended.
+  - The evaluating faculty, who will use it to judge whether the delivered
+    system matches its stated intent and whether the intent was ambitious
+    enough.
+  - Future maintainers, including the team members themselves three weeks
+    later, who will need to recover the reasoning behind decisions that look
+    arbitrary in code.
+
+Requirements are identified with stable codes. Functional requirements use the
+prefix FR, non-functional requirements NFR, business rules BR, and data
+requirements DR. Codes are never reused after deletion; a deleted requirement
+is marked WITHDRAWN and its number retired.
+
+================================================================================
+2. PROBLEM STATEMENT
+================================================================================
+
+------------------------------------------------------------------------------
+2.1 The Current Situation
+------------------------------------------------------------------------------
+
+On a residential campus of roughly thirty thousand students, objects are
+misplaced continuously. The existing recovery mechanisms are informal and each
+one is lossy in a specific way.
+
+The security desk or administrative lost-property counter is the official
+channel. It works well for the narrow case where an item was found by a staff
+member in a monitored area and handed in immediately. It works poorly
+otherwise, because it is a single physical point, open only during working
+hours, and searchable only by physically describing the item to a person who
+must remember every object currently in the cupboard. There is no index. The
+retrieval operation is a full scan performed by a human being from memory.
+
+Class and hostel messaging groups are the unofficial channel. Their strength is
+reach and immediacy; their weakness is that a message is a time-ordered event
+that scrolls away. An item lost on 10 September and found on 17 September will
+almost never be reconnected, because the loss report is seven hundred messages
+above the found report and nobody scrolls. Messaging groups have no persistence
+semantics, no search, and no concept of matching.
+
+Social media posts extend reach further but add noise and privacy exposure.
+Posting a photograph of a found student ID card to a public page discloses a
+name, a registration number and a photograph to an audience far larger than the
+one that needs to see it.
+
+Physical notice boards persist, which is their one advantage, but they are
+location-bound, unsearchable, rarely curated, and effectively write-only.
+
+------------------------------------------------------------------------------
+2.2 The Structural Failure
+------------------------------------------------------------------------------
+
+Every one of these channels shares the same structural defect. The loss report
+and the found report are two independent pieces of information that are never
+brought into contact with each other. The person who lost the item and the
+person who found it both act in good faith, both broadcast information, and yet
+the information never meets, because there is no shared store that holds both
+and no process that compares them.
+
+This is a database problem, stated in its most classical form. Two relations
+exist. A join between them, under a similarity predicate, would produce the
+answer. Nothing performs the join.
+
+FoundIt exists to perform the join.
+
+------------------------------------------------------------------------------
+2.3 Secondary Problems
+------------------------------------------------------------------------------
+
+Solving the matching problem exposes three secondary problems that the product
+must also address, or it will be actively harmful rather than merely useless.
+
+Ownership ambiguity. Once a found item is publicly listed with its description,
+anyone who reads the listing can describe it. A naive system that accepts "that
+is mine" as sufficient becomes an efficient mechanism for theft. The listing
+itself supplies the thief with the vocabulary. FoundIt therefore withholds
+distinguishing detail from public view and requires a claimant to supply it
+from independent knowledge.
+
+Accountability gaps. When an item passes from a finder to a claimant, both
+parties benefit from a record that the handover occurred. Disputes after the
+fact ("I never received it", "I handed it over on Tuesday") are unresolvable
+without one. FoundIt records the resolution event with timestamps and actor
+identity.
+
+Privacy exposure. A lost-and-found system accumulates a surprisingly sensitive
+dataset: who was where, when, and what they carry. FoundIt minimises this by
+never publishing contact details, never publishing exact locations at finer
+granularity than building level for sensitive categories, and exposing contact
+information only after a claim has been approved.
+
+================================================================================
+3. PRODUCT VISION AND POSITIONING
+================================================================================
+
+------------------------------------------------------------------------------
+3.1 Vision Statement
+------------------------------------------------------------------------------
+
+Within two academic terms of deployment, a student who loses something on
+campus should have a single obvious action available to them — file a report on
+FoundIt — and a reasonable expectation that if anyone finds the item and files
+a corresponding report, the two of them will be connected automatically,
+verified safely, and the item returned without either party ever needing to
+know the other's phone number in advance.
+
+------------------------------------------------------------------------------
+3.2 Product Principles
+------------------------------------------------------------------------------
+
+Five principles govern design decisions when requirements conflict. They are
+ordered; an earlier principle wins over a later one.
+
+Principle 1 — Correctness of ownership over speed of return. It is better for
+an item to sit unclaimed for a week than to be handed to the wrong person in an
+hour. Every ambiguous case resolves toward requiring more verification, not
+less.
+
+Principle 2 — Explainability over accuracy. A match score that a student can
+justify line by line is more valuable, in this context, than a marginally more
+accurate score produced by an opaque model. Where a choice exists between a
+clever technique and a legible one, choose legible.
+
+Principle 3 — The database is the system. Logic that can reasonably live in
+SQL, in constraints, in triggers or in views belongs there rather than in
+application code. This is partly pedagogical and partly sound engineering: the
+database is the one component that all clients must go through.
+
+Principle 4 — Minimum viable data collection. Collect the attribute only if the
+matching engine or the verification workflow actually uses it. Every additional
+field is a field a user must fill, a field that can be wrong, and a field that
+constitutes a privacy liability.
+
+Principle 5 — Finish the narrow thing. A complete, polished, well-normalised
+system covering nine features is a better outcome than a partial system
+gesturing at twenty. Feature requests that arrive mid-build default to the
+backlog.
+
+------------------------------------------------------------------------------
+3.3 Positioning Against Alternatives
+------------------------------------------------------------------------------
+
+FoundIt is not competing with commercial lost-and-found platforms used by
+airports and transit authorities. Those systems optimise for high-volume
+professional intake by trained staff, integrate with baggage systems, and carry
+significant compliance obligations. FoundIt optimises for peer-to-peer reporting
+by untrained users in a closed community with verified identity.
+
+The closed-community property is the key structural advantage and should be
+exploited throughout. Because every user authenticates with an institutional
+email address, identity is already established; because the population is
+bounded, abuse is traceable; because the geography is bounded, the location
+dimension can be a curated enumeration rather than free-text or GPS
+coordinates. A curated location table with perhaps eighty rows makes location
+matching exact rather than fuzzy, which is a substantial simplification that a
+general-purpose product cannot make.
+
+================================================================================
+4. GOALS, NON-GOALS AND SUCCESS CRITERIA
+================================================================================
+
+------------------------------------------------------------------------------
+4.1 Product Goals
+------------------------------------------------------------------------------
+
+G1. Provide a single persistent store for lost reports and found reports on
+    campus, replacing ephemeral broadcast channels.
+
+G2. Automatically surface candidate matches between the two sets, ranked by a
+    transparent, reproducible score, within seconds of a report being filed.
+
+G3. Provide a verification workflow that establishes ownership to a reasonable
+    standard before an item changes hands.
+
+G4. Maintain a complete, tamper-evident history of every item's lifecycle.
+
+G5. Expose aggregate insight — loss hotspots, category distributions, recovery
+    rates, time-to-recovery — that campus administration can act on.
+
+------------------------------------------------------------------------------
+4.2 Academic Goals
+------------------------------------------------------------------------------
+
+A1. Demonstrate a fully normalised relational schema in Third Normal Form, with
+    the normalisation reasoning documented from functional dependencies rather
+    than asserted.
+
+A2. Demonstrate non-trivial SQL: multi-table joins, correlated subqueries,
+    aggregate functions with grouping and filtering, window functions, views,
+    and common table expressions.
+
+A3. Demonstrate transaction management and concurrency control on a genuine
+    race condition, with a reproducible demonstration of the failure mode when
+    isolation is inadequate.
+
+A4. Demonstrate index design driven by measured query plans rather than by
+    guesswork, including a before-and-after EXPLAIN comparison.
+
+A5. Demonstrate integrity enforcement at the database layer: primary keys,
+    foreign keys with appropriate referential actions, check constraints,
+    unique constraints, and domain constraints via enumerated types.
+
+------------------------------------------------------------------------------
+4.3 Non-Goals
+------------------------------------------------------------------------------
+
+The following are explicitly out of scope for version 1.0. This list exists so
+that the team can point at it when tempted.
+
+N1.  Image recognition or visual similarity matching of any kind.
+N2.  Natural language understanding of free-text descriptions beyond keyword
+     overlap computed in SQL.
+N3.  A native mobile application for Android or iOS.
+N4.  Real-time push notifications to devices.
+N5.  Payment, reward or bounty mechanisms.
+N6.  Integration with institutional systems of record (student information
+     system, ID card system, access control).
+N7.  Multi-campus or multi-tenant operation.
+N8.  Blockchain, distributed ledger, or any form of decentralised storage.
+N9.  Microservice decomposition.
+N10. A NoSQL component introduced solely to satisfy a syllabus module. If the
+     relational model solves the problem, the relational model is the answer,
+     and the syllabus module is addressed through comparative discussion rather
+     than through gratuitous implementation.
+
+------------------------------------------------------------------------------
+4.4 Success Criteria
+------------------------------------------------------------------------------
+
+Success is measured against thresholds, not impressions.
+
+SC1 — Match recall. In a seeded evaluation dataset of 200 lost reports and 200
+found reports, of which 60 pairs are ground-truth matches, the system surfaces
+the correct found item within the top three ranked candidates for at least 85%
+of those 60 lost reports.
+
+SC2 — Match precision at the strong threshold. Of all candidate pairs scored at
+80 or above, at least 70% are ground-truth matches. This threshold is
+deliberately not set higher; the cost of a false positive is a student
+reviewing a card and dismissing it, which is cheap.
+
+SC3 — Query latency. The match-generation query for a single newly filed report
+completes in under 200 milliseconds against a dataset of 10,000 lost items and
+10,000 found items, measured on the demonstration hardware.
+
+SC4 — Claim safety. In an adversarial test where a tester who has seen only the
+public listing attempts to claim an item, the claim is rejected at the
+proof-of-ownership stage in at least 90% of attempts across 20 trials.
+
+SC5 — Audit completeness. For every item in the database, the concatenation of
+audit log entries reconstructs the current status exactly, with no gaps and no
+contradictions. This is verified by an automated consistency query.
+
+SC6 — Concurrency safety. Under a scripted test issuing 50 simultaneous claim
+approvals against a single found item, exactly one succeeds and the remaining
+49 fail with a defined error. Zero cases of double-approval.
+
+SC7 — Normalisation. An external reviewer, given the schema and the documented
+functional dependencies, can verify Third Normal Form compliance for every
+relation without needing to consult the team.
+
+================================================================================
+5. STAKEHOLDERS AND USER PERSONAS
+================================================================================
+
+------------------------------------------------------------------------------
+5.1 Stakeholder Map
+------------------------------------------------------------------------------
+
+Primary stakeholders are the students who lose and find objects. They are the
+only users whose behaviour determines whether the system succeeds, because a
+lost-and-found with reports on only one side of the ledger is worthless. The
+system must therefore be at least as easy to use as posting in a WhatsApp
+group, or it will lose to the WhatsApp group.
+
+Secondary stakeholders are the administrative staff who currently hold physical
+custody of found property. FoundIt should reduce their workload rather than add
+to it, which means the staff interface must be optimised for bulk intake and
+rapid lookup rather than for browsing.
+
+Tertiary stakeholders are campus administration, who gain a dataset they have
+never had: a measured view of where property is lost, what is lost, and how
+often it is recovered. This supports concrete interventions such as placing a
+collection box outside the library reading hall if 22% of all losses occur
+there.
+
+The evaluating faculty are a stakeholder of a different kind. They do not use
+the running system; they assess the artefact. Their requirements are met by
+documentation quality, schema rigour, query sophistication and the ability of
+the team to defend design decisions.
+
+------------------------------------------------------------------------------
+5.2 Persona — Ananya, the Owner
+------------------------------------------------------------------------------
+
+Ananya is a second-year student who realises at 9 p.m. that her wireless
+earphones are not in her bag. She last remembers having them in the central
+library that afternoon. She is mildly distressed, currently in her hostel room,
+and using her phone.
+
+What she needs is to file a report in under ninety seconds without thinking
+hard about any field. What she does not need is a form asking for a serial
+number she has never looked at. Her mental model is "I tell the system what I
+lost and it tells me if anyone found it."
+
+Her critical moment is the point at which she opens the app the next morning.
+If there is a match waiting, the product has succeeded in her eyes, regardless
+of any other quality. If there is no match, the product must clearly tell her
+that her report is live and will be checked automatically against every future
+found report, so that she does not conclude the system is broken and revert to
+the WhatsApp group.
+
+Design implications: the lost-report form must have at most six required fields;
+category, colour and location must be selection controls rather than free text;
+the match list must be the first thing on the landing screen after login; the
+empty state must be reassuring and explanatory rather than blank.
+
+------------------------------------------------------------------------------
+5.3 Persona — Rahul, the Finder
+------------------------------------------------------------------------------
+
+Rahul finds a pair of earphones on a library table. He is a decent person and
+would like to return them, but his willingness is finite and decays with
+friction. If reporting takes four minutes and requires him to create an account
+with a password he must invent, a meaningful fraction of Rahuls will simply
+leave the item on the table.
+
+What Rahul needs is a report flow shorter than the lost flow, because he has
+less at stake. He also needs a clear answer to "what do I do with the physical
+object?" — the system must tell him either to deposit it at a named collection
+point or to retain it pending a claim, and this instruction must be
+unambiguous.
+
+Rahul's second critical moment is the verification request. When a claimant
+answers the proof question, Rahul is asked to confirm whether the answer is
+correct. This must be a single screen with a yes/no decision and no ambiguity
+about what he is agreeing to.
+
+Design implications: guest-mode reporting with email verification deferred;
+found-report form with four required fields; explicit custody instruction on
+submission confirmation; verification screen reduced to one question and two
+buttons.
+
+------------------------------------------------------------------------------
+5.4 Persona — Ms. Fatima, the Custodian
+------------------------------------------------------------------------------
+
+Ms. Fatima staffs the security desk. She receives eight to fifteen items per
+day in peak weeks. Her interaction pattern is entirely different from a
+student's: she does bulk data entry, and she does lookups against a physical
+shelf.
+
+What she needs is a rapid-entry form that remembers the previous entry's
+location, a printable shelf label with a short code, and a search that lets her
+type a code and instantly see the item record. She also needs a bulk view of
+items that have been in custody beyond a defined period so that unclaimed
+property can be escalated or disposed of according to institutional policy.
+
+Design implications: a dedicated staff console separate from the student
+interface; keyboard-first data entry; a storage-location field present only on
+the staff path; an ageing report.
+
+------------------------------------------------------------------------------
+5.5 Persona — Dr. Menon, the Administrator
+------------------------------------------------------------------------------
+
+Dr. Menon is a student-welfare officer who looks at the system once a month. He
+needs five numbers: how many items reported, how many recovered, the recovery
+rate, the median time to recovery, and the top five loss locations. He will
+never file a report and will never verify a claim.
+
+Design implications: a read-only analytics dashboard backed by database views;
+no drill-down into individual personal records beyond what is necessary;
+exportable summary figures.
+
+================================================================================
+6. SCOPE DEFINITION
+================================================================================
+
+------------------------------------------------------------------------------
+6.1 In Scope — Minimum Viable Product
+------------------------------------------------------------------------------
+
+The MVP is nine capabilities. All nine must ship, and nothing outside them ships
+until all nine are complete and tested.
+
+  MVP-1  User registration and authentication against institutional email.
+  MVP-2  Report a lost item.
+  MVP-3  Report a found item.
+  MVP-4  Browse and search found items.
+  MVP-5  Automatic generation of candidate matches on report submission.
+  MVP-6  Transparent match scoring with a displayed breakdown of reasons.
+  MVP-7  Claim initiation against a match, including proof-of-ownership.
+  MVP-8  Verification and approval workflow for claims.
+  MVP-9  Audit history of every status transition on every item.
+
+------------------------------------------------------------------------------
+6.2 In Scope — Post-MVP Enhancements
+------------------------------------------------------------------------------
+
+These are specified here so that the schema can accommodate them without
+migration pain, but they are not built until the MVP is complete.
+
+  ENH-1  In-application notification centre.
+  ENH-2  Photograph upload with server-side thumbnailing.
+  ENH-3  Administrative analytics dashboard.
+  ENH-4  Email notification on match creation and claim decision.
+  ENH-5  Advanced matching including keyword weighting and synonym handling.
+  ENH-6  Bulk staff intake console with printable labels.
+  ENH-7  Item ageing and disposal workflow for long-unclaimed property.
+
+------------------------------------------------------------------------------
+6.3 Explicitly Out of Scope
+------------------------------------------------------------------------------
+
+Restating the non-goals as scope exclusions, with the reasoning that makes each
+exclusion defensible rather than lazy.
+
+Image recognition is excluded because the marginal gain over attribute matching
+is small for commodity objects, the implementation cost is large, and the result
+is inexplicable in a viva. A student cannot be asked to justify why a
+convolutional network produced a similarity of 0.81.
+
+Mobile applications are excluded because a responsive web client reaches every
+device in the population with one codebase, and the project's differentiator is
+the data layer, not the client platform.
+
+Real-time push is excluded because it requires either a persistent connection
+infrastructure or third-party push services, neither of which teaches anything
+about databases, and the polling alternative is adequate for a system where the
+expected latency between loss and recovery is measured in days.
+
+Payment and reward mechanisms are excluded because they introduce financial
+regulation, fraud vectors, and a perverse incentive to fabricate found reports.
+
+Integration with institutional systems of record is excluded because it
+requires institutional approval, credentials and a data-sharing agreement that
+cannot be obtained within a project timeline.
+
+------------------------------------------------------------------------------
+6.4 Scope Boundary Cases
+------------------------------------------------------------------------------
+
+Several situations sit on the boundary and must be decided explicitly rather
+than discovered during implementation.
+
+Documents and identity cards. Student ID cards, Aadhaar cards, debit cards and
+passports are found frequently and are the most sensitive category. FoundIt
+accepts found reports for them but suppresses all identifying detail from public
+listings: the listing reads "Identity document — found near Main Gate" with no
+name, no number and no photograph. Matching for this category relies on the
+owner filing a lost report, and the proof question is generated automatically
+("what is the last digit of the number on the card?"). Custody instruction for
+this category always routes to the security desk; students are never asked to
+retain identity documents.
+
+Perishable and hazardous items. Food containers, medication and anything
+requiring refrigeration are out of scope for custody. The found-report form
+displays a notice directing the finder to the security desk and does not create
+a listing.
+
+High-value items. Laptops, phones and jewellery are accepted but flagged for
+mandatory staff verification; the peer-to-peer verification path is disabled for
+this category and approval requires a staff account.
+
+Items found off-campus. Out of scope. The location enumeration contains only
+campus locations, and there is no free-text location field, which enforces this
+constraint structurally rather than by policy.
+
+================================================================================
+7. FUNCTIONAL REQUIREMENTS
+================================================================================
+
+Each requirement is stated as a testable assertion. Priority is one of MUST
+(MVP, blocking), SHOULD (MVP, degradable) or COULD (post-MVP).
+
+------------------------------------------------------------------------------
+7.1 Identity and Access
+------------------------------------------------------------------------------
+
+FR-1.1 (MUST) The system shall allow a person to register an account using an
+email address, a display name, a password and an optional phone number and
+department.
+
+FR-1.2 (MUST) The system shall reject registration where the email address is
+already associated with an existing account. Email uniqueness shall be enforced
+by a UNIQUE constraint at the database layer, not only by an application check,
+so that concurrent registration attempts cannot both succeed.
+
+FR-1.3 (SHOULD) The system shall restrict registration to email addresses in a
+configured institutional domain, with the permitted domain list stored as
+configuration rather than hard-coded.
+
+FR-1.4 (MUST) The system shall store passwords only as salted cryptographic
+hashes using a memory-hard function. The plaintext password shall never be
+written to any table, log or audit record.
+
+FR-1.5 (MUST) The system shall authenticate a returning user by email and
+password and shall establish a session valid for a bounded period.
+
+FR-1.6 (MUST) The system shall support three roles: STUDENT, STAFF and ADMIN.
+Role shall be an attribute of the user record and shall govern access to
+privileged operations.
+
+FR-1.7 (SHOULD) The system shall allow a user to update their own display name,
+phone number and department, and shall record the change in the audit log.
+
+FR-1.8 (COULD) The system shall support password reset by emailed token.
+
+------------------------------------------------------------------------------
+7.2 Reporting a Lost Item
+------------------------------------------------------------------------------
+
+FR-2.1 (MUST) An authenticated user shall be able to create a lost-item report
+specifying item name, category, location, and date of loss.
+
+FR-2.2 (MUST) The report form shall additionally accept colour, brand,
+free-text description and an optional time-of-day window. These fields are
+optional but contribute to match score when supplied.
+
+FR-2.3 (MUST) Category shall be selected from a controlled vocabulary stored in
+a reference table. Free-text category entry shall not be permitted.
+
+FR-2.4 (MUST) Location shall be selected from a controlled vocabulary stored in
+a locations table carrying building and floor attributes. Free-text location
+entry shall not be permitted.
+
+FR-2.5 (MUST) Colour and brand, where supplied, shall be selected from
+reference tables with an "Other" escape value that permits free text captured in
+a separate column.
+
+FR-2.6 (MUST) The date of loss shall not be in the future. This shall be
+enforced by a CHECK constraint.
+
+FR-2.7 (MUST) On successful creation the report shall be assigned status OPEN
+and an audit entry shall be written recording creation.
+
+FR-2.8 (MUST) Immediately after creation the system shall execute the matching
+procedure against all found items with status AVAILABLE and shall persist every
+candidate scoring at or above the weak threshold.
+
+FR-2.9 (SHOULD) The user shall be able to edit their own lost report while its
+status is OPEN, and every edit shall be audited.
+
+FR-2.10 (MUST) The user shall be able to withdraw their own lost report,
+transitioning it to status CLOSED_BY_USER. Withdrawal shall cascade to
+invalidate any pending matches but shall not delete them.
+
+FR-2.11 (SHOULD) A lost report shall automatically transition to status EXPIRED
+after a configured retention period, default ninety days, with the transition
+audited.
+
+------------------------------------------------------------------------------
+7.3 Reporting a Found Item
+------------------------------------------------------------------------------
+
+FR-3.1 (MUST) An authenticated user shall be able to create a found-item report
+specifying item name, category, location and date found.
+
+FR-3.2 (MUST) The found-report form shall accept the same optional descriptive
+attributes as the lost form, plus a mandatory custody declaration indicating
+whether the finder retains the item or has deposited it.
+
+FR-3.3 (MUST) Where custody is declared as deposited, a storage location shall
+be recorded.
+
+FR-3.4 (MUST) The found report shall support a private distinguishing-feature
+field that is never rendered in any public listing and is used exclusively to
+generate and evaluate proof-of-ownership challenges.
+
+FR-3.5 (MUST) On successful creation the report shall be assigned status
+AVAILABLE and an audit entry shall be written.
+
+FR-3.6 (MUST) Immediately after creation the system shall execute the matching
+procedure against all lost items with status OPEN and shall persist every
+candidate at or above the weak threshold.
+
+FR-3.7 (MUST) The system shall display a custody instruction on the confirmation
+screen appropriate to the declared category, routing sensitive and high-value
+categories to the security desk.
+
+FR-3.8 (SHOULD) A staff user shall be able to create found reports on behalf of
+an anonymous finder, recording the finder as a null user with an optional
+free-text note.
+
+FR-3.9 (MUST) The found-report form shall allow the finder to mark
+an item as high value. An item so marked shall require staff
+verification regardless of its category.
+
+------------------------------------------------------------------------------
+7.4 Browse and Search
+------------------------------------------------------------------------------
+
+FR-4.1 (MUST) Any authenticated user shall be able to browse the list of found
+items with status AVAILABLE, ordered by date found descending.
+
+FR-4.2 (MUST) The browse view shall support filtering by category, location,
+building, colour and date range, individually and in combination.
+
+FR-4.3 (MUST) The browse view shall support keyword search across item name and
+public description.
+
+FR-4.4 (MUST) The browse view shall be paginated with a bounded page size, and
+pagination shall be implemented with LIMIT and OFFSET or keyset pagination, not
+by fetching the full set and slicing in application code.
+
+FR-4.5 (MUST) The browse view shall never expose the private distinguishing
+feature, the finder's contact details, or the exact storage location.
+
+FR-4.6 (SHOULD) The browse view shall display, for each item, the number of days
+it has been in the system, to give the viewer a sense of urgency.
+
+FR-4.7 (COULD) Lost items shall be browsable by staff so that a walk-in enquiry
+can be checked against outstanding losses.
+
+------------------------------------------------------------------------------
+7.5 Matching
+------------------------------------------------------------------------------
+
+FR-5.1 (MUST) The system shall compute a match score between any lost item and
+any found item as a deterministic function of their attributes, as specified in
+section 8.
+
+FR-5.2 (MUST) The score shall be an integer in the range 0 to 100 inclusive.
+
+FR-5.3 (MUST) Candidate pairs scoring at or above the configured weak threshold
+shall be persisted as rows in a matches relation, carrying the score, a
+machine-readable breakdown of contributing factors, and a status.
+
+FR-5.4 (MUST) The pair (lost item, found item) shall be unique in the matches
+relation, enforced by a composite UNIQUE constraint.
+
+FR-5.5 (MUST) Match generation shall be idempotent. Re-running the procedure for
+an existing report shall update scores where inputs changed and shall not create
+duplicate rows.
+
+FR-5.6 (MUST) Each match shall be classified into a confidence band: STRONG for
+scores at or above 80, POSSIBLE for 60 to 79, WEAK for the configured floor to
+59.
+
+FR-5.7 (MUST) A user shall see matches only for reports they own, except that
+staff and admin users may view all matches.
+
+FR-5.8 (MUST) Match reasons shall be displayed to the user in human language,
+itemised by contributing attribute with the points awarded for each, such that
+the displayed points sum exactly to the displayed score.
+
+FR-5.9 (SHOULD) A user shall be able to dismiss a match they judge incorrect,
+transitioning it to status REJECTED_BY_USER, and dismissed matches shall not
+reappear.
+
+FR-5.10 (SHOULD) The scoring weights and thresholds shall be stored in a
+configuration table rather than embedded in query text, so that tuning does not
+require code deployment.
+
+FR-5.11 (COULD) The system shall recompute matches for all OPEN lost items on a
+scheduled basis to catch cases where reference data changed.
+
+------------------------------------------------------------------------------
+7.6 Claims
+------------------------------------------------------------------------------
+
+FR-6.1 (MUST) The owner of a lost report shall be able to initiate a claim
+against a match.
+
+FR-6.2 (MUST) Claim initiation shall require the claimant to answer a
+proof-of-ownership challenge in free text.
+
+FR-6.3 (MUST) A claim shall be created with status PENDING and shall be visible
+to the finder and to staff, but the claimant's proof answer shall be visible
+only to the verifier, never to other claimants.
+
+FR-6.4 (MUST) At most one claim may be in status APPROVED for any given found
+item. This shall be enforced by a partial unique index or equivalent constraint,
+in addition to application logic.
+
+FR-6.5 (MUST) Multiple claims may exist concurrently in status PENDING against
+the same found item.
+
+FR-6.6 (MUST) Approval of a claim shall occur inside a single database
+transaction that verifies the found item is still AVAILABLE, sets the claim to
+APPROVED, sets the found item to CLAIMED, sets the linked lost item to MATCHED
+or RESOLVED as appropriate, rejects all other pending claims on the same item,
+and writes audit entries for each change. If any step fails, the entire
+transaction shall roll back.
+
+FR-6.7 (MUST) The verifier shall be the finder for ordinary categories and a
+staff user for sensitive and high-value categories.
+
+FR-6.8 (MUST) Contact details of the counterparty shall be revealed to each
+party only after a claim reaches status APPROVED.
+
+FR-6.9 (MUST) A claim may be rejected, transitioning to status REJECTED with an
+optional reason, leaving the found item AVAILABLE.
+
+FR-6.10 (MUST) After physical handover, either party shall be able to mark the
+transaction complete, transitioning the found item to RETURNED and the lost item
+to RESOLVED, with the resolution timestamp recorded.
+
+FR-6.11 (SHOULD) A claim in status PENDING for longer than a configured period,
+default seven days, shall be flagged for staff attention.
+
+FR-6.12 (SHOULD) A user who accumulates three rejected claims within thirty days
+shall be flagged for review, and the flag shall be visible to staff.
+
+------------------------------------------------------------------------------
+7.7 Audit and History
+------------------------------------------------------------------------------
+
+FR-7.1 (MUST) Every status transition on a lost item, found item or claim shall
+write an audit record capturing entity type, entity identifier, action, previous
+status, new status, acting user and timestamp.
+
+FR-7.2 (MUST) Audit records shall be append-only. No application code path shall
+update or delete an audit record.
+
+FR-7.3 (MUST) The audit trail for any single item shall be retrievable as a
+chronologically ordered list and shall be renderable as a timeline in the user
+interface.
+
+FR-7.4 (MUST) Audit writes shall occur within the same transaction as the change
+they describe, so that a committed change always has a corresponding audit entry
+and a rolled-back change leaves none.
+
+FR-7.5 (SHOULD) Audit records shall capture a free-text detail field for context
+that does not fit the structured columns.
+
+FR-7.6 (COULD) The audit trail shall be exportable as CSV for a given entity or
+date range.
+
+------------------------------------------------------------------------------
+7.8 Administration
+------------------------------------------------------------------------------
+
+FR-8.1 (MUST) An admin user shall be able to view all reports, matches and
+claims regardless of ownership.
+
+FR-8.2 (MUST) An admin user shall be able to manage reference data: categories,
+locations, colours and brands.
+
+FR-8.3 (MUST) Reference data deletion shall be prevented where dependent rows
+exist; the referential action on these foreign keys shall be RESTRICT.
+Deactivation via an is_active flag shall be provided as the safe alternative.
+
+FR-8.4 (SHOULD) An admin user shall be able to adjust scoring weights and
+thresholds through the interface.
+
+FR-8.5 (SHOULD) An admin user shall be able to view the analytics described in
+section 14.
+
+FR-8.6 (COULD) An admin user shall be able to merge duplicate reports filed by
+the same user for the same item.
+
+================================================================================
+8. THE MATCHING ENGINE — PRODUCT SPECIFICATION
+================================================================================
+
+------------------------------------------------------------------------------
+8.1 Design Rationale
+------------------------------------------------------------------------------
+
+The matching engine is the reason the product exists, so its specification
+belongs in the PRD rather than being deferred entirely to the technical
+document. What follows defines behaviour and rationale; the TRD defines the SQL.
+
+The engine is an additive scoring model. Each attribute comparison contributes a
+fixed number of points when it succeeds and zero when it fails. Points are
+summed and capped at 100. There is no multiplication, no normalisation by
+available attributes, and no learned weight.
+
+Additive scoring was chosen over three alternatives for specific reasons.
+
+A weighted average normalised by the number of comparable attributes was
+rejected because it produces counter-intuitive behaviour: a sparse report with
+only two supplied attributes, both matching, scores 100, outranking a rich
+report with six attributes of which five match. Users interpret a high score as
+strong evidence, and sparse agreement is weak evidence.
+
+A probabilistic model such as naive Bayes was rejected because it requires
+training data that does not exist at launch, and because conditional
+independence between colour and brand is obviously false.
+
+Cosine similarity over a vectorised description was rejected because it
+collapses all attributes into an opaque scalar and cannot produce the itemised
+reason list that FR-5.8 requires.
+
+------------------------------------------------------------------------------
+8.2 The Scoring Rubric
+------------------------------------------------------------------------------
+
+Six components, summing to a maximum of 100.
+
+  Component               Points   Condition
+  ----------------------  ------   ------------------------------------------
+  Category agreement         20    Identical category identifier
+  Brand agreement            20    Identical brand identifier, both non-null
+  Location agreement         20    Identical location identifier
+  Colour agreement           15    Identical colour identifier, both non-null
+  Temporal proximity         15    Graduated by day difference (see below)
+  Description overlap        10    Graduated by shared significant keywords
+
+Temporal proximity is graduated rather than binary because the underlying
+signal is genuinely continuous. A found date one day after a lost date is very
+strong evidence; five days later is weak but not zero; a found date before the
+lost date is impossible and must score zero. The graduation is:
+
+  Found date equals lost date                      15 points
+  Found date one day after lost date               13 points
+  Found date two days after lost date              10 points
+  Found date three to five days after               6 points
+  Found date six to fourteen days after             3 points
+  Found date more than fourteen days after          0 points
+  Found date before lost date                       0 points
+
+The asymmetry is deliberate and is a point worth defending in a viva. An item
+cannot be found before it is lost. Where the found date precedes the lost date,
+either one of the reports contains a date error or they are not the same object.
+The engine treats this as zero evidence rather than as disqualifying, because
+users do mistype dates, and the other five components can still carry a pair
+into the POSSIBLE band.
+
+Description overlap is computed as the count of shared tokens after
+normalisation to lower case, removal of a stop-word list, and removal of tokens
+shorter than three characters. Two shared tokens award 10 points, one shared
+token awards 5, zero awards nothing. The cap at two tokens prevents a verbose
+description from dominating the score through incidental word repetition.
+
+------------------------------------------------------------------------------
+8.3 Null Handling
+------------------------------------------------------------------------------
+
+Optional attributes are frequently absent. The rule is that a component awards
+points only when both sides are present and equal. A null on either side awards
+zero and is not penalised further.
+
+This produces a property worth stating explicitly: the maximum achievable score
+for a sparse pair is below 100. A pair where neither report specified brand or
+colour can reach at most 65, which is in the POSSIBLE band. This is correct
+behaviour. A pair described only by category, location and date genuinely is
+only a possible match, and the interface should say so rather than inflating
+confidence.
+
+------------------------------------------------------------------------------
+8.4 Confidence Bands and Their Meaning
+------------------------------------------------------------------------------
+
+STRONG (80–100). Presented prominently with a call to action to claim. The user
+is told this is very likely their item.
+
+POSSIBLE (60–79). Presented in a secondary list. The user is told this might be
+their item and is encouraged to review the details.
+
+WEAK (40–59). Persisted but collapsed behind a "show weaker matches" control.
+The user is not proactively alerted.
+
+Below 40. Not persisted. The floor exists to prevent the matches relation from
+growing quadratically with the product of the two item tables. With a floor of
+40, a pair must agree on at least two substantial attributes to be stored.
+
+------------------------------------------------------------------------------
+8.5 Displayed Reasons
+------------------------------------------------------------------------------
+
+The reason breakdown is stored with the match, not recomputed at display time.
+Storing it guarantees that what the user saw is what the engine computed, even
+if weights are later retuned. The stored structure is a list of component
+identifiers with their awarded points, and the interface renders each as a
+sentence:
+
+  Same category (Electronics)                   +20
+  Same brand (Apple)                            +20
+  Same location (Central Library)               +20
+  Same colour (White)                           +15
+  Found 1 day after loss                        +13
+  Shared keywords: black, case                  +10
+  ------------------------------------------------
+  Total                                          98
+
+The requirement that displayed points sum exactly to the displayed score is not
+cosmetic. It is the mechanism by which the user, and the examiner, can verify
+that the system is doing what it claims.
+
+------------------------------------------------------------------------------
+8.6 Tuning Policy
+------------------------------------------------------------------------------
+
+Weights are stored in configuration and may be tuned, but tuning must be
+evidence-driven. The evaluation dataset described in SC1 and SC2 is the
+instrument. A proposed weight change is accepted only if it improves recall
+without reducing precision below the threshold, or improves precision without
+reducing recall below the threshold. Ad hoc tuning based on a single anecdotal
+mismatch is prohibited, because it overfits to one example and silently degrades
+the general case.
+
+================================================================================
+9. PROOF-OF-OWNERSHIP AND CLAIM VERIFICATION
+================================================================================
+
+------------------------------------------------------------------------------
+9.1 The Threat Model
+------------------------------------------------------------------------------
+
+The adversary is an opportunistic student, not a determined attacker. They read
+public listings, see an item they would like to own, and attempt to claim it.
+They have no access to the database, no ability to intercept traffic, and no
+relationship with the finder.
+
+Their entire information advantage comes from the public listing. Therefore the
+defence is straightforward in principle: ensure that the public listing does not
+contain enough information to answer the verification challenge.
+
+The threat model explicitly excludes the case where the adversary physically
+observed the item before it was lost, for instance a roommate. No practical
+verification scheme defeats that adversary, and the product does not claim to.
+
+------------------------------------------------------------------------------
+9.2 Information Partitioning
+------------------------------------------------------------------------------
+
+Every found report partitions its descriptive information into two sets.
+
+The public set contains item name, category, colour, brand, the building-level
+location, the date found, and a sanitised public description. This set is
+sufficient for an owner to recognise their item and insufficient for a stranger
+to prove ownership.
+
+The private set contains the distinguishing feature supplied by the finder, any
+serial number or engraving, the exact storage location, and the finder's
+identity and contact details. This set is never rendered in a browse view, never
+included in an API response to a non-owner, and never present in a public
+listing page's HTML source.
+
+The partition is enforced at the query layer, not at the template layer. Public
+listing endpoints select an explicit column list that excludes private columns,
+rather than selecting all columns and omitting some in rendering. A view named
+for public consumption is the natural mechanism, and using one is both good
+practice and a demonstrable use of views for access control.
+
+------------------------------------------------------------------------------
+9.3 The Challenge
+------------------------------------------------------------------------------
+
+When a finder files a report, they are asked one additional question: "What is
+one detail about this item that would not be obvious from a photograph?"
+Examples shown in the placeholder text include a scratch in a specific place, a
+sticker, an engraving, the contents of a wallet, the wallpaper on a locked
+phone, or the name written inside a book.
+
+This answer is stored privately. When a claimant initiates a claim, they are
+shown the prompt "Describe a distinguishing detail of this item" and must supply
+free text. The two texts are never compared automatically; the comparison is
+performed by a human verifier who sees both.
+
+Automatic comparison was considered and rejected. Natural-language equivalence
+between "small scratch on the lid" and "lid has a scratch near the hinge" is
+beyond the scope of the system, and false negatives would be worse than the
+human review cost, because a false negative means an owner is denied their own
+property.
+
+------------------------------------------------------------------------------
+9.4 Verification Paths
+------------------------------------------------------------------------------
+
+Peer verification. For ordinary categories the finder is the verifier. They
+receive the claim, see both texts, and decide. This path is fast and requires no
+staff involvement.
+
+Staff verification. For any item the finder marks as high value, or any category
+flagged requires_staff, a staff account must verify. This path is slower but
+appropriate to the stakes.
+
+Automatic verification. For identity documents where the owner's name is
+recorded on the item and the claimant's registered name matches exactly, the
+system may pre-approve pending a staff confirmation. This is a post-MVP
+enhancement.
+
+------------------------------------------------------------------------------
+9.5 Failure Handling
+------------------------------------------------------------------------------
+
+A rejected claim does not destroy information. The claim row persists with
+status REJECTED and an optional reason, so that a pattern of repeated failed
+claims by one user becomes visible. FR-6.12 uses exactly this data.
+
+A claimant whose claim is rejected sees a neutral message. They are not told
+what the correct answer was, and they are not told how close they were, because
+both disclosures would let an adversary iterate toward a correct answer across
+multiple claims.
+
+A limit of three claims per user per found item, and three pending claims per
+user overall, bounds the iteration attack without meaningfully constraining
+legitimate users.
+
+================================================================================
+10. NON-FUNCTIONAL REQUIREMENTS
+================================================================================
+
+------------------------------------------------------------------------------
+10.1 Performance
+------------------------------------------------------------------------------
+
+NFR-1.1 The match-generation procedure for a single new report shall complete
+within 200 milliseconds at a dataset size of 10,000 rows in each item table.
+
+NFR-1.2 The browse listing, with any combination of filters, shall return the
+first page within 300 milliseconds at the same dataset size.
+
+NFR-1.3 Any user-facing page shall render its primary content within one second
+on a typical campus network connection.
+
+NFR-1.4 The claim approval transaction shall complete within 500 milliseconds
+and shall hold locks for the minimum interval necessary.
+
+NFR-1.5 Every query appearing in a user-facing code path shall have a reviewed
+execution plan. Any plan showing a sequential scan on a table exceeding 1,000
+rows shall be justified in writing or indexed away.
+
+------------------------------------------------------------------------------
+10.2 Scalability
+------------------------------------------------------------------------------
+
+NFR-2.1 The system shall support 50,000 total item records and 5,000 registered
+users without schema change.
+
+NFR-2.2 The matches relation is the growth risk, since it is bounded above by
+the product of the two item tables. The weak-score floor, the status filter
+restricting candidates to OPEN and AVAILABLE items, and a date-window
+pre-filter shall together keep the matches relation within a linear multiple of
+the item tables in practice. This shall be verified by measurement at the
+evaluation dataset size.
+
+NFR-2.3 The system shall support 100 concurrent authenticated sessions.
+
+------------------------------------------------------------------------------
+10.3 Reliability and Integrity
+------------------------------------------------------------------------------
+
+NFR-3.1 No committed transaction shall leave the database in a state violating
+any declared constraint.
+
+NFR-3.2 The database shall be the enforcement point for all integrity rules
+expressible as constraints. Application-layer validation is a user-experience
+convenience and is never the sole guard.
+
+NFR-3.3 Every foreign key shall declare an explicit ON DELETE and ON UPDATE
+action, chosen deliberately per relationship and documented.
+
+NFR-3.4 The system shall recover to a consistent state after an abrupt process
+termination during any multi-statement operation.
+
+NFR-3.5 A daily logical backup of the database shall be taken and its restore
+procedure shall be tested at least once before final demonstration.
+
+------------------------------------------------------------------------------
+10.4 Security
+------------------------------------------------------------------------------
+
+NFR-4.1 All database access from the application shall use parameterised
+statements. String concatenation to build SQL is prohibited without exception.
+
+NFR-4.2 Session tokens shall be transmitted only over encrypted connections in
+any deployment reachable beyond localhost.
+
+NFR-4.3 Authorisation shall be checked server-side on every request. The absence
+of a control in the interface is never treated as an access restriction.
+
+NFR-4.4 Private columns shall not appear in any response served to a user who
+does not own the underlying record or hold a privileged role.
+
+NFR-4.5 Rate limiting shall be applied to authentication and claim endpoints.
+
+NFR-4.6 Passwords, session tokens and proof answers shall never appear in
+application logs.
+
+------------------------------------------------------------------------------
+10.5 Privacy
+------------------------------------------------------------------------------
+
+NFR-5.1 Contact details shall be disclosed only after claim approval and only to
+the two parties involved.
+
+NFR-5.2 Photographs of identity documents shall not be accepted for upload.
+
+NFR-5.3 Resolved records shall be retained for one academic year and then
+anonymised, with user references replaced by a tombstone identifier while
+preserving aggregate statistics.
+
+NFR-5.4 A user shall be able to request deletion of their account. Deletion
+shall anonymise rather than cascade-delete, preserving the audit trail's
+referential integrity.
+
+------------------------------------------------------------------------------
+10.6 Usability and Accessibility
+------------------------------------------------------------------------------
+
+NFR-6.1 The lost-report flow shall be completable in under ninety seconds by a
+first-time user, verified by timed observation of at least five testers.
+
+NFR-6.2 The interface shall be usable at a viewport width of 360 pixels.
+
+NFR-6.3 All interactive controls shall be reachable and operable by keyboard.
+
+NFR-6.4 Text contrast shall meet WCAG AA at minimum.
+
+NFR-6.5 Every form validation error shall identify the specific field and state
+the correction required.
+
+NFR-6.6 Every list view shall have a designed empty state explaining why it is
+empty and what action would change that.
+
+------------------------------------------------------------------------------
+10.7 Maintainability
+------------------------------------------------------------------------------
+
+NFR-7.1 The schema shall be defined in version-controlled migration files
+applied in sequence. Manual schema edits outside migrations are prohibited.
+
+NFR-7.2 Seed data for reference tables shall be scripted and reproducible.
+
+NFR-7.3 Scoring weights, thresholds and retention periods shall be configuration
+rather than literals.
+
+NFR-7.4 Every non-obvious SQL statement shall carry a comment stating its
+purpose and its expected access path.
+
+================================================================================
+11. DATA REQUIREMENTS AND ENTITY OVERVIEW
+================================================================================
+
+This section states what data the product needs and why, at the level of
+entities and their responsibilities. Column types, constraints and indexes are
+specified in the Technical Requirements Document.
+
+------------------------------------------------------------------------------
+11.1 Entity Inventory
+------------------------------------------------------------------------------
+
+DR-1 USERS. One row per registered person. Holds identity, credentials, contact
+details and role. Every report and every claim traces to a user, which is what
+makes the closed-community trust model work.
+
+DR-2 LOCATIONS. One row per named campus place. Holds a display name, a
+building, a floor and an activity flag. This table is the single most important
+normalisation decision in the project, and its justification is given in 11.2.
+
+DR-3 CATEGORIES. One row per item category. Supports an optional parent
+reference so that a two-level hierarchy (Electronics → Earphones) is available
+without a schema change, though version 1.0 uses a flat list.
+
+DR-4 COLOURS. One row per canonical colour, with a hex value for interface
+rendering.
+
+DR-5 BRANDS. One row per known brand. Seeded with common campus brands and
+extensible by admin.
+
+DR-6 LOST_ITEMS. One row per lost report. References the reporting user, a
+category, a location and optionally a colour and brand. Holds the loss date, a
+public description, a status and timestamps.
+
+DR-7 FOUND_ITEMS. One row per found report. Mirrors LOST_ITEMS structurally and
+adds custody declaration, is_high_value, storage location and the private distinguishing
+feature.
+
+DR-8 MATCHES. One row per candidate pairing. References one lost item and one
+found item, and holds the computed score, the stored reason breakdown, a
+confidence band and a status.
+
+DR-9 CLAIMS. One row per ownership assertion. References a match and a claimant,
+and holds the proof text, a verification status, the verifying user, decision
+timestamps and an optional rejection reason.
+
+DR-10 AUDIT_LOG. One row per state change anywhere in the system. Holds entity
+type, entity identifier, action, previous status, new status, acting user,
+timestamp and a detail field.
+
+DR-11 MATCH_CONFIG. One row per tunable parameter. Holds the parameter key, its
+value and a description. Supports FR-5.10 and NFR-7.3.
+
+DR-12 NOTIFICATIONS (post-MVP). One row per user-directed message, with a read
+flag and a reference to the triggering entity.
+
+------------------------------------------------------------------------------
+11.2 Why LOCATIONS Is a Table
+------------------------------------------------------------------------------
+
+This decision deserves its own subsection because it is the clearest available
+illustration of why normalisation matters, and because a team under time
+pressure will be tempted to make location a text column.
+
+Suppose location is stored as free text. Within a week the database contains
+"Library", "library", "Main Library", "Central Library", "CL", "Lib" and
+"Libaray". These are seven distinct values denoting one place.
+
+Three specific failures follow. First, matching breaks: a lost report saying
+"Library" and a found report saying "Main Library" score zero on the location
+component, losing 20 points from a pair that should match strongly. Second,
+analytics break: the query for the top five loss locations returns seven
+variants of one place and misses genuinely distinct locations that would
+otherwise rank. Third, filtering breaks: a browse filter for one spelling hides
+items recorded under another, and the user concludes the system is empty.
+
+Promoting location to a table with a foreign key fixes all three
+simultaneously. Matching becomes an integer equality on an indexed column.
+Analytics group by a stable key. Filtering is exact. The building and floor
+attributes additionally enable a graduated location component in a future
+version — same location scores 20, same building different floor scores 10 —
+which free text could never support.
+
+The functional dependency being eliminated is location_name → building, floor.
+In a denormalised design this dependency holds within the item tables, where
+location_name is not a key, which is a Third Normal Form violation by
+definition. Extracting the table removes the transitive dependency. This is a
+textbook case and should be presented as one.
+
+The same reasoning applies, with slightly less force, to categories, colours and
+brands.
+
+------------------------------------------------------------------------------
+11.3 Data Volume Estimates
+------------------------------------------------------------------------------
+
+Estimates drive index and capacity decisions and should be stated rather than
+assumed.
+
+A campus of 30,000 students with a 10% annual adoption rate in year one yields
+roughly 3,000 registered users. Reported losses at a conservative rate of two
+per adopting user per year yields 6,000 lost reports annually. Found reports
+historically run at roughly 40% of lost reports, giving 2,400 found reports.
+
+Matches are the volatile figure. Without a floor, 6,000 × 2,400 is 14.4 million
+candidate pairs, which is unacceptable. With a category equality pre-filter
+across roughly 15 categories, the candidate space drops by a factor of 15 to
+under a million. With an additional 30-day date-window pre-filter, it drops by
+roughly a further factor of 10. With the score floor of 40 applied, the
+persisted set is empirically a small multiple of the lost-item count. The
+design target is fewer than 30,000 persisted match rows annually, and this must
+be measured rather than assumed.
+
+Audit log rows run at approximately six per item across a full lifecycle,
+giving roughly 50,000 rows annually. This table grows monotonically and should
+be the first candidate for partitioning if the system is ever run beyond the
+project horizon.
+
+------------------------------------------------------------------------------
+11.4 Data Quality Requirements
+------------------------------------------------------------------------------
+
+DQ-1 Controlled vocabularies shall be used wherever a finite set of values
+exists, in preference to free text.
+
+DQ-2 Free text shall be trimmed of leading and trailing whitespace and shall be
+normalised to a consistent case for comparison purposes while preserving the
+user's original casing for display.
+
+DQ-3 Dates shall be stored in a date or timestamp type, never as strings.
+
+DQ-4 Enumerated statuses shall be constrained at the database layer, either by a
+native enumerated type or by a CHECK constraint enumerating permitted values.
+
+DQ-5 Every table shall carry a created_at timestamp defaulting to the
+transaction time, and mutable tables shall additionally carry updated_at.
+
+DQ-6 Monetary and measurement values, if ever introduced, shall carry explicit
+units in the column name.
+
+================================================================================
+12. BUSINESS RULES AND CONSTRAINTS
+================================================================================
+
+Business rules are statements of policy that the system enforces. Each is
+mapped, where possible, to the mechanism that enforces it, because a rule
+enforced only by convention is a rule that will be violated.
+
+BR-1 A user may not claim an item they themselves reported as found. Enforced by
+a CHECK constraint comparing claimant identity to finder identity, or by a
+trigger where the comparison spans tables.
+
+BR-2 A found item may have at most one approved claim. Enforced by a partial
+unique index on the claims relation restricted to approved status.
+
+BR-3 A lost item may be linked to at most one found item through an approved
+claim. Enforced by the same mechanism applied to the lost side.
+
+BR-4 The date found on a found report may not be in the future. Enforced by
+CHECK.
+
+BR-5 The date lost on a lost report may not be in the future. Enforced by CHECK.
+
+BR-6 A match may not pair a lost item and a found item reported by the same
+user. Enforced in the matching procedure's WHERE clause, because a user finding
+their own item needs no system intervention.
+
+BR-7 A match score shall lie between 0 and 100. Enforced by CHECK.
+
+BR-8 A match is persisted only if its score meets the configured floor. Enforced
+in the matching procedure.
+
+BR-9 The pairing of a lost item and a found item is unique in the matches
+relation. Enforced by a composite UNIQUE constraint.
+
+BR-10 Reference data rows in use may not be deleted. Enforced by ON DELETE
+RESTRICT.
+
+BR-11 Audit records are immutable. Enforced by revoking UPDATE and DELETE
+privileges on the audit table from the application database role, which is
+stronger than any application convention.
+
+BR-12 A claim may be approved only while the underlying found item is AVAILABLE.
+Enforced inside the approval transaction by a locking read that re-verifies
+status.
+
+BR-13 Sensitive categories require staff verification. Enforced by a flag on the
+category reference table consulted during claim routing.
+
+BR-14 Contact details are disclosed only after approval. Enforced by the query
+layer, which selects contact columns only in the post-approval endpoint.
+
+BR-15 A user may hold at most three pending claims simultaneously. Enforced in
+application logic with a supporting query, and documented as a policy rather
+than a hard constraint because the limit is tunable.
+
+BR-16 Lost reports older than the retention period transition to EXPIRED.
+Enforced by a scheduled job with an audited transition.
+
+------------------------------------------------------------------------------
+12.1 State Machines
+------------------------------------------------------------------------------
+
+Lost item status transitions:
+
+  OPEN → MATCHED           when a claim against this lost item is approved
+  OPEN → RESOLVED          when the owner marks the item recovered independently
+  OPEN → CLOSED_BY_USER    when the owner withdraws the report
+  OPEN → EXPIRED           when retention elapses
+  MATCHED → RESOLVED       when physical handover is confirmed
+  MATCHED → OPEN           when the approved claim is reversed by staff
+
+Found item status transitions:
+
+  AVAILABLE → CLAIMED      when a claim against this found item is approved
+  CLAIMED → RETURNED       when physical handover is confirmed
+  CLAIMED → AVAILABLE      when the approved claim is reversed
+  AVAILABLE → DISPOSED     when unclaimed beyond the disposal period
+
+Claim status transitions:
+
+  PENDING → APPROVED       verifier accepts the proof
+  PENDING → REJECTED       verifier rejects the proof
+  PENDING → WITHDRAWN      claimant withdraws before decision
+  APPROVED → COMPLETED     handover confirmed
+  APPROVED → REVERSED      staff reverses an approval
+
+Match status transitions:
+
+  SUGGESTED → CLAIMED           a claim is created against this match
+  SUGGESTED → REJECTED_BY_USER  the owner dismisses the suggestion
+  SUGGESTED → INVALIDATED       either side leaves its eligible status
+  CLAIMED → CONFIRMED           the claim is approved
+  CLAIMED → SUGGESTED           the claim is rejected
+
+Any transition not listed is forbidden. The forbidden set is as important as the
+permitted set, and the implementation should reject unlisted transitions
+explicitly rather than silently allowing them.
+
+================================================================================
+13. USER STORIES WITH ACCEPTANCE CRITERIA
+================================================================================
+
+Stories are written in the conventional form and each carries acceptance
+criteria stated as observable outcomes. A story is complete only when every
+criterion is demonstrably satisfied.
+
+------------------------------------------------------------------------------
+US-1 — Register
+------------------------------------------------------------------------------
+As a student, I want to create an account with my institutional email so that I
+can file and track reports.
+
+Acceptance:
+  - Submitting a valid, unused institutional email with a compliant password
+    creates an account and establishes a session.
+  - Submitting an email already in use returns a clear error and creates no row.
+  - Submitting a non-institutional domain is rejected when domain restriction is
+    enabled.
+  - The stored password value does not equal the submitted password.
+  - Two simultaneous registrations with the same email result in exactly one
+    account.
+
+------------------------------------------------------------------------------
+US-2 — Report a lost item
+------------------------------------------------------------------------------
+As an owner, I want to report what I lost so that the system can look for it.
+
+Acceptance:
+  - The form presents category, location, colour and brand as selection
+    controls populated from reference tables.
+  - Submitting with all mandatory fields creates a row with status OPEN.
+  - A future loss date is rejected with a field-specific message.
+  - An audit entry with action CREATED exists for the new row.
+  - Matching runs on submission and any candidates are visible to the user
+    without a further action.
+  - The complete flow is achievable in under ninety seconds by a first-time
+    user.
+
+------------------------------------------------------------------------------
+US-3 — Report a found item
+------------------------------------------------------------------------------
+As a finder, I want to report what I found so that the owner can recover it.
+
+Acceptance:
+  - The form includes a mandatory custody declaration.
+  - The private distinguishing-feature field is present and is marked as not
+    publicly visible.
+  - Submission creates a row with status AVAILABLE and an audit entry.
+  - The confirmation screen displays a custody instruction appropriate to the
+    category.
+  - The private field does not appear in any public listing response.
+
+------------------------------------------------------------------------------
+US-4 — Browse found items
+------------------------------------------------------------------------------
+As a user, I want to look through what has been found so that I can spot my item
+even if the automatic match missed it.
+
+Acceptance:
+  - The list shows only items with status AVAILABLE.
+  - Filters for category, location and date range work individually and in
+    combination.
+  - Keyword search matches against item name and public description.
+  - Pagination is server-side.
+  - Private fields are absent from the response payload, verified by inspection.
+
+------------------------------------------------------------------------------
+US-5 — See my matches
+------------------------------------------------------------------------------
+As an owner, I want to see items that might be mine, ranked, with reasons.
+
+Acceptance:
+  - Matches are grouped by confidence band with STRONG first.
+  - Each card displays the score and the itemised reasons.
+  - The displayed reason points sum exactly to the displayed score.
+  - Only matches belonging to the requesting user's reports are returned.
+  - Weak matches are collapsed behind an explicit control.
+  - An empty state explains that the report is live and will be checked against
+    future found reports.
+
+------------------------------------------------------------------------------
+US-6 — Claim an item
+------------------------------------------------------------------------------
+As an owner, I want to assert that a found item is mine and prove it.
+
+Acceptance:
+  - The claim form requires a free-text proof answer.
+  - Submission creates a claim with status PENDING and an audit entry.
+  - The claimant cannot see the finder's stored distinguishing feature at any
+    point.
+  - Attempting to claim an item the user themselves reported is rejected.
+  - A user already holding three pending claims is prevented from creating a
+    fourth.
+
+------------------------------------------------------------------------------
+US-7 — Verify a claim
+------------------------------------------------------------------------------
+As a finder, I want to check whether a claimant really owns the item.
+
+Acceptance:
+  - The verification screen shows the claimant's proof text and the finder's
+    stored distinguishing feature side by side.
+  - Approval and rejection are single actions with confirmation.
+  - Approval runs in one transaction that updates the claim, the found item, the
+    lost item and all competing claims, and writes audit entries for each.
+  - Rejection leaves the found item AVAILABLE and other pending claims
+    untouched.
+  - After approval, both parties see contact details; before approval, neither
+    does.
+
+------------------------------------------------------------------------------
+US-8 — Confirm handover
+------------------------------------------------------------------------------
+As either party, I want to record that the item changed hands.
+
+Acceptance:
+  - Either party can mark completion.
+  - Completion sets the found item to RETURNED and the lost item to RESOLVED.
+  - A resolution timestamp is recorded and appears in the audit trail.
+
+------------------------------------------------------------------------------
+US-9 — View item history
+------------------------------------------------------------------------------
+As a user, I want to see everything that has happened to my report.
+
+Acceptance:
+  - The timeline lists every audit entry for the item in chronological order.
+  - Each entry shows the action, the transition, the actor and the timestamp.
+  - The final entry's new status equals the item's current status.
+
+------------------------------------------------------------------------------
+US-10 — Staff intake
+------------------------------------------------------------------------------
+As a custodian, I want to enter items handed to my desk quickly.
+
+Acceptance:
+  - The staff form defaults location to the previous entry's value.
+  - A storage location field is present and mandatory.
+  - The finder may be recorded as anonymous.
+  - Entry of ten items is achievable in under ten minutes.
+
+------------------------------------------------------------------------------
+US-11 — Administrative analytics
+------------------------------------------------------------------------------
+As an administrator, I want aggregate figures so that I can act on them.
+
+Acceptance:
+  - The dashboard reports total reports, recovery count, recovery rate, median
+    time to recovery, and top five loss locations.
+  - Every figure is produced by a database view or aggregate query, not by
+    application-side computation over fetched rows.
+  - Figures reconcile against manually computed values on the seeded dataset.
+
+------------------------------------------------------------------------------
+US-12 — Manage reference data
+------------------------------------------------------------------------------
+As an administrator, I want to maintain the controlled vocabularies.
+
+Acceptance:
+  - Adding a location, category, colour or brand makes it immediately available
+    in report forms.
+  - Deleting a reference row that is in use is refused with a clear message.
+  - Deactivating a reference row removes it from new-report selection lists
+    while leaving existing references intact.
+
+================================================================================
+14. REPORTING AND ANALYTICS REQUIREMENTS
+================================================================================
+
+Analytics are a product requirement, not a technical afterthought, because they
+are the deliverable for the administrator persona and because they are the
+natural home for the aggregate SQL that the syllabus expects.
+
+AN-1 Total reports filed, split by lost and found, over a selectable period.
+
+AN-2 Recovery rate, defined as the count of lost items reaching status RESOLVED
+divided by the count of lost items filed in the period, expressed as a
+percentage.
+
+AN-3 Median and mean time to recovery, measured from lost-report creation to
+resolution timestamp, reported in days.
+
+AN-4 Top loss locations, ranked by count of lost reports, with building rollup.
+
+AN-5 Top found locations, ranked similarly, and the divergence between the two
+rankings, which identifies places where items are lost but never found and
+therefore where a collection box would help.
+
+AN-6 Category distribution of both lost and found reports.
+
+AN-7 Match quality distribution: count of matches by confidence band, and the
+proportion of each band that converted to an approved claim. This is the
+instrument for tuning scoring weights.
+
+AN-8 Claim outcome distribution: approved, rejected, pending, withdrawn.
+
+AN-9 Ageing report: found items in custody beyond 30, 60 and 90 days.
+
+AN-10 Weekly trend of reports filed, to identify seasonal patterns around
+examinations and festivals.
+
+Each analytic shall be implemented as a database view or a parameterised query,
+and each shall be reproducible on demand. Where a figure requires ranking within
+groups, a window function shall be used in preference to a correlated subquery,
+and the choice shall be explained in the technical documentation.
+
+================================================================================
+15. ASSUMPTIONS, DEPENDENCIES AND RISKS
+================================================================================
+
+------------------------------------------------------------------------------
+15.1 Assumptions
+------------------------------------------------------------------------------
+
+AS-1 Every intended user possesses an institutional email address and can
+receive mail at it.
+
+AS-2 Users report honestly. The system defends against opportunistic
+appropriation of found items but does not defend against coordinated fraud.
+
+AS-3 The campus location set is stable enough that an enumerated table needs
+updating no more than a few times per term.
+
+AS-4 Users have intermittent network access and will tolerate a request latency
+of up to one second.
+
+AS-5 A single database instance is sufficient for the projected load.
+
+AS-6 Physical custody arrangements exist and are known; the system records them
+but does not create them.
+
+------------------------------------------------------------------------------
+15.2 Dependencies
+------------------------------------------------------------------------------
+
+DP-1 A relational database engine supporting transactions, foreign keys, check
+constraints and window functions.
+
+DP-2 A hosting environment reachable from the campus network.
+
+DP-3 An outbound mail capability for the post-MVP notification feature. Absence
+of this degrades ENH-4 only and blocks nothing in the MVP.
+
+DP-4 Access to a representative list of campus buildings and rooms for seeding
+the locations table.
+
+DP-5 Availability of team members across the project timeline as planned in the
+implementation document.
+
+------------------------------------------------------------------------------
+15.3 Risk Register
+------------------------------------------------------------------------------
+
+RK-1 Cold start. At launch the database is empty and every user's first
+experience is an empty match list, which reads as failure. Severity high,
+likelihood certain. Mitigation: seed the system with a realistic demonstration
+dataset for evaluation; in real deployment, recruit the security desk as the
+first bulk contributor of found reports so that browse is never empty.
+
+RK-2 Asymmetric adoption. Owners have strong incentive to report; finders have
+weak incentive. If found reports never arrive, the system is a list of
+complaints. Severity high, likelihood moderate. Mitigation: make the found flow
+shorter than the lost flow, allow reporting without prior registration, and
+make the social value visible through a recovery counter.
+
+RK-3 Match quality disappointment. If early matches are visibly wrong, users
+stop trusting scores and the feature is dead. Severity high, likelihood
+moderate. Mitigation: the weak-match collapse, the itemised reason display which
+lets users see why a match was suggested, and evidence-driven tuning against the
+evaluation dataset before demonstration.
+
+RK-4 Matches table explosion. Quadratic growth if the floor or the pre-filters
+are wrong. Severity moderate, likelihood low given the design, but the failure
+is silent until the database is large. Mitigation: measure match-row count at
+each seeding milestone and assert an upper bound in the test suite.
+
+RK-5 Scope creep. The most likely cause of project failure is the team adding
+image recognition in week six. Severity high, likelihood moderate. Mitigation:
+the non-goals list in 4.3 is binding, and any addition requires an amendment to
+this document with a named owner and an assessment of what is being dropped in
+exchange.
+
+RK-6 Privacy incident. Accidental exposure of a private field through a
+carelessly written endpoint. Severity high, likelihood low. Mitigation:
+public-facing queries read from views that physically exclude private columns,
+plus a test asserting that no public endpoint response contains any private
+column name.
+
+RK-7 Concurrency bug in claim approval. Severity high, likelihood moderate if
+implemented naively. Mitigation: explicit locking read inside the approval
+transaction, the partial unique index as a backstop, and an automated
+concurrency test that is part of the definition of done.
+
+RK-8 Timeline compression. Late completion leaves testing and documentation
+unfinished, which is where marks are lost. Severity moderate, likelihood
+moderate. Mitigation: the five-phase plan front-loads the database work, which
+is both the highest-value component and the hardest to retrofit.
+
+================================================================================
+16. RELEASE STRATEGY AND PRIORITISATION
+================================================================================
+
+------------------------------------------------------------------------------
+16.1 MoSCoW Allocation
+------------------------------------------------------------------------------
+
+MUST: FR-1.1, 1.2, 1.4, 1.5, 1.6; FR-2.1 through 2.8 and 2.10; FR-3.1 through
+3.7; FR-4.1 through 4.5; FR-5.1 through 5.8; FR-6.1 through 6.10; FR-7.1
+through 7.4; FR-8.1, 8.2, 8.3.
+
+SHOULD: FR-1.3, 1.7; FR-2.9, 2.11; FR-3.8; FR-4.6; FR-5.9, 5.10; FR-6.11, 6.12;
+FR-7.5; FR-8.4, 8.5.
+
+COULD: FR-1.8; FR-4.7; FR-5.11; FR-7.6; FR-8.6; all ENH items.
+
+WON'T (this release): every item in the non-goals list.
+
+------------------------------------------------------------------------------
+16.2 Release Gates
+------------------------------------------------------------------------------
+
+Alpha gate. Schema complete and migrated; all reference data seeded; lost and
+found reports creatable through the API; matching procedure produces correct
+scores against a hand-verified fixture set of twenty pairs.
+
+Beta gate. All MVP user interface flows navigable end to end; claim approval
+transaction passes the concurrency test; audit trail passes the completeness
+consistency query.
+
+Release candidate gate. Evaluation dataset loaded; SC1 through SC7 measured and
+met; documentation set complete; demonstration script rehearsed end to end at
+least twice without intervention.
+
+------------------------------------------------------------------------------
+16.3 Definition of Done
+------------------------------------------------------------------------------
+
+A requirement is done when the behaviour is implemented, its acceptance criteria
+are demonstrably satisfied, the relevant constraint exists in the schema where
+the requirement implies one, an automated or scripted test exercises the
+behaviour including at least one negative case, and the corresponding section of
+the technical documentation is written.
+
+Code that works but has no constraint behind it is not done. Behaviour that
+passes a happy-path click-through but has no negative test is not done.
+
+================================================================================
+17. EVALUATION MAPPING TO DBMS SYLLABUS
+================================================================================
+
+This section exists so that the evaluator can trace each syllabus module to
+concrete artefacts and so that the team knows what it must be able to defend.
+
+Module 1 — Database systems fundamentals. Demonstrated by the relational schema
+itself: primary keys on every relation, foreign keys with deliberately chosen
+referential actions, domain constraints through enumerated types and CHECK
+clauses, entity integrity through NOT NULL primary keys, and referential
+integrity through the foreign key graph. The team must be able to explain the
+difference between the conceptual, logical and physical levels using their own
+schema as the example, and to name a specific instance of physical independence
+such as adding an index without altering any query text.
+
+Module 2 — Entity-relationship modelling and normalisation. Demonstrated by the
+ER diagram, the documented functional dependency set, and the stepwise
+normalisation narrative. The strongest available illustration is the locations
+extraction described in 11.2: a genuine transitive dependency, a genuine Third
+Normal Form violation, and a decomposition with a clear benefit. The team must
+be able to state the functional dependencies of each relation, identify
+candidate keys, and argue Third Normal Form compliance. A Boyce-Codd Normal Form
+discussion should be prepared for the matches relation, where the composite
+uniqueness of the lost-found pair invites the question.
+
+Module 3 — Query processing and optimisation. Demonstrated by the matching query
+itself, which joins two large relations under a compound predicate with a
+computed ranking expression; by the analytics views, which use aggregation,
+grouping, having clauses and window functions; by nested and correlated
+subqueries in the claim and match-status queries; and by the index design
+exercise, in which the team presents EXPLAIN output before and after index
+creation and explains the change in access path. The team must be able to read
+an execution plan aloud and identify the join algorithm chosen.
+
+Module 4 — Transaction management and concurrency control. Demonstrated by the
+claim approval transaction, which is a genuine race condition arising naturally
+from the domain rather than a contrived example. The team must be able to
+demonstrate the failure: run two approvals concurrently without locking and show
+two approved claims on one item; then show the same test passing with a locking
+read. They must be able to explain atomicity, consistency, isolation and
+durability in terms of this specific transaction, name the isolation level in
+use, describe the anomaly that a lower level would permit, and explain how the
+database detects or prevents deadlock.
+
+Module 5 — Advanced and emerging topics. Addressed through comparative analysis
+rather than through gratuitous implementation. The team should prepare a short
+written argument on where a document store or a graph database would and would
+not help this workload: a graph database would model the lost-found-claim
+network naturally and would make multi-hop queries easy, but the workload has no
+multi-hop queries; a document store would eliminate the reference-table joins but
+would reintroduce exactly the duplication that section 11.2 exists to prevent.
+Choosing correctly and defending the choice is a stronger demonstration of
+understanding than bolting on a second database.
+
+================================================================================
+18. GLOSSARY
+================================================================================
+
+Audit entry. An immutable record of a single state change, written in the same
+transaction as the change.
+
+Candidate pair. A lost item and a found item considered for matching before
+scoring is applied.
+
+Claim. A formal assertion of ownership by a user against a found item, carrying
+proof text and a verification outcome.
+
+Confidence band. The categorisation of a match score into STRONG, POSSIBLE or
+WEAK.
+
+Controlled vocabulary. A finite set of permitted values stored in a reference
+table and referenced by foreign key.
+
+Custody declaration. The finder's statement of where the physical item is:
+retained personally or deposited at a named point.
+
+Distinguishing feature. A private descriptive detail supplied by the finder and
+used to verify claims. Never publicly displayed.
+
+Found item. A record describing an object someone has found.
+
+Lost item. A record describing an object someone has lost.
+
+Match. A persisted candidate pair with a computed score, a stored reason
+breakdown and a status.
+
+Match reason. One component of a score, consisting of an attribute comparison
+and the points it contributed.
+
+Proof-of-ownership. The challenge-response process by which a claimant
+demonstrates independent knowledge of the item.
+
+Recovery rate. The proportion of lost reports that reach resolved status.
+
+Reference table. A table holding a controlled vocabulary.
+
+Score floor. The minimum score at which a candidate pair is persisted.
+
+Time to recovery. The interval between a lost report's creation and its
+resolution.
+
+================================================================================
+19. OPEN QUESTIONS AND CHANGE LOG
+================================================================================
+
+------------------------------------------------------------------------------
+19.1 Open Questions
+------------------------------------------------------------------------------
+
+OQ-1 Should a found report be creatable without registration, with identity
+captured only if a claim arises? Reduces finder friction materially but
+complicates the foreign key from found items to users, which would need to
+become nullable. Decision required before schema freeze.
+
+OQ-2 Should the location component of the score be graduated by building, so
+that a different floor of the same building scores partial points? The data
+supports it; the added complexity is modest. Deferred to post-MVP tuning.
+
+OQ-3 What is the institutional policy on disposal of unclaimed property, and
+what retention period should the ageing report use? Requires an external answer.
+
+OQ-4 Should found items be visible to unauthenticated visitors, to maximise the
+chance an owner sees their item without signing up? Improves recovery; weakens
+privacy. Current position is authenticated-only.
+
+OQ-5 Should the system support a "seen but not taken" report, where a user
+observes an item but leaves it in place? Adds a third item type and considerable
+complexity for an uncertain benefit. Current position is no.
+
+------------------------------------------------------------------------------
+19.2 Change Log
+------------------------------------------------------------------------------
+
+  Version   Date          Author       Summary
+  -------   -----------   ----------   -------------------------------------
+  0.1       12 Sep 2026   A. Garg      Initial problem framing and entity
+                                       sketch.
+  0.2       15 Sep 2026   A. Garg      Added matching rubric, personas,
+                                       non-goals.
+  0.3       16 Sep 2026   A. Garg      Added proof-of-ownership section and
+                                       threat model.
+  1.0       18 Sep 2026   A. Garg      Baselined. Requirements numbered,
+                                       success criteria quantified, syllabus
+                                       mapping added.
+  1.1       19 Sep 2026   A. Garg      Fixed description overlap scoring logic.
+                                       Added is_high_value to found_items and
+                                       updated verification routing.
+
+------------------------------------------------------------------------------
+19.3 Amendment Procedure
+------------------------------------------------------------------------------
+
+Any change to a MUST requirement after the Alpha gate requires the change to be
+recorded in `docs/specs/CHANGELOG.txt` with a named owner, a statement of what is being removed
+from scope to make room for it, and an assessment of impact on the schema. Silent
+scope changes are the mechanism by which projects fail, and the discipline of
+writing down the trade is what prevents them. `CHANGELOG.txt` serves as the single source
+of truth for all cross-document changes.
+
+================================================================================
+END OF DOCUMENT — FI-PRD-001 v1.1
+================================================================================
