@@ -1,7 +1,12 @@
 node_modules/
 .env
 *.log
+logfile
 /coverage
 .DS_Store
-temp_foundit/
-temp_pg_data/
+/scratch/
+/out*.txt
+/log_*.txt
+/*_output.txt
+/seed_*.txt
+/schema_dump.txt
