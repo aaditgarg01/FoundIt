@@ -1,0 +1,452 @@
+[
+  {
+    "name": "Central Library — Reading Hall",
+    "building": "Main Library",
+    "zone": "North Campus",
+    "weight": 14
+  },
+  {
+    "name": "Main Cafeteria",
+    "building": "Cafeteria",
+    "zone": "Central Campus",
+    "weight": 12
+  },
+  {
+    "name": "Central Library — Ground Floor",
+    "building": "Main Library",
+    "zone": "North Campus",
+    "weight": 9
+  },
+  {
+    "name": "AB-1 Lecture Hall 204",
+    "building": "Academic Block 1",
+    "zone": "South Campus",
+    "weight": 6
+  },
+  {
+    "name": "AB-1 Lecture Hall 101",
+    "building": "Academic Block 1",
+    "zone": "South Campus",
+    "weight": 5
+  },
+  {
+    "name": "Sports Complex — Gym",
+    "building": "Sports Complex",
+    "zone": "East Campus",
+    "weight": 4
+  },
+  {
+    "name": "Hostel A — Mess",
+    "building": "Hostel A",
+    "zone": "West Campus",
+    "weight": 4
+  },
+  {
+    "name": "Admin Block — Reception",
+    "building": "Admin Block",
+    "zone": "Central Campus",
+    "weight": 3
+  },
+  {
+    "name": "Main Library — Computer Lab",
+    "building": "Main Library",
+    "zone": "North Campus",
+    "weight": 3
+  },
+  {
+    "name": "Cafeteria — Outdoor Seating",
+    "building": "Cafeteria",
+    "zone": "Central Campus",
+    "weight": 3
+  },
+  {
+    "name": "AB-2 Seminar Hall",
+    "building": "Academic Block 2",
+    "zone": "South Campus",
+    "weight": 3
+  },
+  {
+    "name": "Hostel B — Common Room",
+    "building": "Hostel B",
+    "zone": "West Campus",
+    "weight": 2
+  },
+  {
+    "name": "Sports Complex — Changing Room",
+    "building": "Sports Complex",
+    "zone": "East Campus",
+    "weight": 1
+  },
+  {
+    "name": "Hostel A - Area 13",
+    "building": "Hostel A",
+    "zone": "Campus",
+    "weight": 3
+  },
+  {
+    "name": "Hostel B - Area 14",
+    "building": "Hostel B",
+    "zone": "Campus",
+    "weight": 3
+  },
+  {
+    "name": "Admin Block - Area 15",
+    "building": "Admin Block",
+    "zone": "Campus",
+    "weight": 3
+  },
+  {
+    "name": "Main Library - Area 16",
+    "building": "Main Library",
+    "zone": "Campus",
+    "weight": 3
+  },
+  {
+    "name": "Cafeteria - Area 17",
+    "building": "Cafeteria",
+    "zone": "Campus",
+    "weight": 2
+  },
+  {
+    "name": "Academic Block 1 - Area 18",
+    "building": "Academic Block 1",
+    "zone": "Campus",
+    "weight": 2
+  },
+  {
+    "name": "Academic Block 2 - Area 19",
+    "building": "Academic Block 2",
+    "zone": "Campus",
+    "weight": 2
+  },
+  {
+    "name": "Sports Complex - Area 20",
+    "building": "Sports Complex",
+    "zone": "Campus",
+    "weight": 2
+  },
+  {
+    "name": "Hostel A - Area 21",
+    "building": "Hostel A",
+    "zone": "Campus",
+    "weight": 2
+  },
+  {
+    "name": "Hostel B - Area 22",
+    "building": "Hostel B",
+    "zone": "Campus",
+    "weight": 2
+  },
+  {
+    "name": "Admin Block - Area 23",
+    "building": "Admin Block",
+    "zone": "Campus",
+    "weight": 2
+  },
+  {
+    "name": "Main Library - Area 24",
+    "building": "Main Library",
+    "zone": "Campus",
+    "weight": 2
+  },
+  {
+    "name": "Cafeteria - Area 25",
+    "building": "Cafeteria",
+    "zone": "Campus",
+    "weight": 2
+  },
+  {
+    "name": "Academic Block 1 - Area 26",
+    "building": "Academic Block 1",
+    "zone": "Campus",
+    "weight": 1
+  },
+  {
+    "name": "Academic Block 2 - Area 27",
+    "building": "Academic Block 2",
+    "zone": "Campus",
+    "weight": 1
+  },
+  {
+    "name": "Sports Complex - Area 28",
+    "building": "Sports Complex",
+    "zone": "Campus",
+    "weight": 1
+  },
+  {
+    "name": "Hostel A - Area 29",
+    "building": "Hostel A",
+    "zone": "Campus",
+    "weight": 1
+  },
+  {
+    "name": "Hostel B - Area 30",
+    "building": "Hostel B",
+    "zone": "Campus",
+    "weight": 1
+  },
+  {
+    "name": "Admin Block - Area 31",
+    "building": "Admin Block",
+    "zone": "Campus",
+    "weight": 1
+  },
+  {
+    "name": "Main Library - Area 32",
+    "building": "Main Library",
+    "zone": "Campus",
+    "weight": 1
+  },
+  {
+    "name": "Cafeteria - Area 33",
+    "building": "Cafeteria",
+    "zone": "Campus",
+    "weight": 1
+  },
+  {
+    "name": "Academic Block 1 - Area 34",
+    "building": "Academic Block 1",
+    "zone": "Campus",
+    "weight": 1
+  },
+  {
+    "name": "Academic Block 2 - Area 35",
+    "building": "Academic Block 2",
+    "zone": "Campus",
+    "weight": 1
+  },
+  {
+    "name": "Sports Complex - Area 36",
+    "building": "Sports Complex",
+    "zone": "Campus",
+    "weight": 1
+  },
+  {
+    "name": "Hostel A - Area 37",
+    "building": "Hostel A",
+    "zone": "Campus",
+    "weight": 1
+  },
+  {
+    "name": "Hostel B - Area 38",
+    "building": "Hostel B",
+    "zone": "Campus",
+    "weight": 1
+  },
+  {
+    "name": "Admin Block - Area 39",
+    "building": "Admin Block",
+    "zone": "Campus",
+    "weight": 1
+  },
+  {
+    "name": "Main Library - Area 40",
+    "building": "Main Library",
+    "zone": "Campus",
+    "weight": 1
+  },
+  {
+    "name": "Cafeteria - Area 41",
+    "building": "Cafeteria",
+    "zone": "Campus",
+    "weight": 1
+  },
+  {
+    "name": "Academic Block 1 - Area 42",
+    "building": "Academic Block 1",
+    "zone": "Campus",
+    "weight": 1
+  },
+  {
+    "name": "Academic Block 2 - Area 43",
+    "building": "Academic Block 2",
+    "zone": "Campus",
+    "weight": 1
+  },
+  {
+    "name": "Sports Complex - Area 44",
+    "building": "Sports Complex",
+    "zone": "Campus",
+    "weight": 1
+  },
+  {
+    "name": "Hostel A - Area 45",
+    "building": "Hostel A",
+    "zone": "Campus",
+    "weight": 1
+  },
+  {
+    "name": "Hostel B - Area 46",
+    "building": "Hostel B",
+    "zone": "Campus",
+    "weight": 1
+  },
+  {
+    "name": "Admin Block - Area 47",
+    "building": "Admin Block",
+    "zone": "Campus",
+    "weight": 1
+  },
+  {
+    "name": "Main Library - Area 48",
+    "building": "Main Library",
+    "zone": "Campus",
+    "weight": 1
+  },
+  {
+    "name": "Cafeteria - Area 49",
+    "building": "Cafeteria",
+    "zone": "Campus",
+    "weight": 1
+  },
+  {
+    "name": "Academic Block 1 - Area 50",
+    "building": "Academic Block 1",
+    "zone": "Campus",
+    "weight": 1
+  },
+  {
+    "name": "Academic Block 2 - Area 51",
+    "building": "Academic Block 2",
+    "zone": "Campus",
+    "weight": 1
+  },
+  {
+    "name": "Sports Complex - Area 52",
+    "building": "Sports Complex",
+    "zone": "Campus",
+    "weight": 1
+  },
+  {
+    "name": "Hostel A - Area 53",
+    "building": "Hostel A",
+    "zone": "Campus",
+    "weight": 1
+  },
+  {
+    "name": "Hostel B - Area 54",
+    "building": "Hostel B",
+    "zone": "Campus",
+    "weight": 1
+  },
+  {
+    "name": "Admin Block - Area 55",
+    "building": "Admin Block",
+    "zone": "Campus",
+    "weight": 1
+  },
+  {
+    "name": "Main Library - Area 56",
+    "building": "Main Library",
+    "zone": "Campus",
+    "weight": 1
+  },
+  {
+    "name": "Cafeteria - Area 57",
+    "building": "Cafeteria",
+    "zone": "Campus",
+    "weight": 1
+  },
+  {
+    "name": "Academic Block 1 - Area 58",
+    "building": "Academic Block 1",
+    "zone": "Campus",
+    "weight": 1
+  },
+  {
+    "name": "Academic Block 2 - Area 59",
+    "building": "Academic Block 2",
+    "zone": "Campus",
+    "weight": 1
+  },
+  {
+    "name": "Sports Complex - Area 60",
+    "building": "Sports Complex",
+    "zone": "Campus",
+    "weight": 1
+  },
+  {
+    "name": "Hostel A - Area 61",
+    "building": "Hostel A",
+    "zone": "Campus",
+    "weight": 1
+  },
+  {
+    "name": "Hostel B - Area 62",
+    "building": "Hostel B",
+    "zone": "Campus",
+    "weight": 1
+  },
+  {
+    "name": "Admin Block - Area 63",
+    "building": "Admin Block",
+    "zone": "Campus",
+    "weight": 1
+  },
+  {
+    "name": "Main Library - Area 64",
+    "building": "Main Library",
+    "zone": "Campus",
+    "weight": 1
+  },
+  {
+    "name": "Cafeteria - Area 65",
+    "building": "Cafeteria",
+    "zone": "Campus",
+    "weight": 1
+  },
+  {
+    "name": "Academic Block 1 - Area 66",
+    "building": "Academic Block 1",
+    "zone": "Campus",
+    "weight": 1
+  },
+  {
+    "name": "Academic Block 2 - Area 67",
+    "building": "Academic Block 2",
+    "zone": "Campus",
+    "weight": 1
+  },
+  {
+    "name": "Sports Complex - Area 68",
+    "building": "Sports Complex",
+    "zone": "Campus",
+    "weight": 1
+  },
+  {
+    "name": "Hostel A - Area 69",
+    "building": "Hostel A",
+    "zone": "Campus",
+    "weight": 1
+  },
+  {
+    "name": "Hostel B - Area 70",
+    "building": "Hostel B",
+    "zone": "Campus",
+    "weight": 1
+  },
+  {
+    "name": "Admin Block - Area 71",
+    "building": "Admin Block",
+    "zone": "Campus",
+    "weight": 1
+  },
+  {
+    "name": "Main Library - Area 72",
+    "building": "Main Library",
+    "zone": "Campus",
+    "weight": 1
+  },
+  {
+    "name": "Cafeteria - Area 73",
+    "building": "Cafeteria",
+    "zone": "Campus",
+    "weight": 1
+  },
+  {
+    "name": "Academic Block 1 - Area 74",
+    "building": "Academic Block 1",
+    "zone": "Campus",
+    "weight": 1
+  }
+]
