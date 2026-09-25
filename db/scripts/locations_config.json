@@ -1,0 +1,442 @@
+[
+  {
+    "location_name": "Library Lab 257",
+    "building": "Library",
+    "zone": "North Campus"
+  },
+  {
+    "location_name": "Library Cafe 267",
+    "building": "Library",
+    "zone": "North Campus"
+  },
+  {
+    "location_name": "Science Block Lounge 433",
+    "building": "Science Block",
+    "zone": "North Campus"
+  },
+  {
+    "location_name": "Science Block Office 422",
+    "building": "Science Block",
+    "zone": "North Campus"
+  },
+  {
+    "location_name": "Engineering Block Room 462",
+    "building": "Engineering Block",
+    "zone": "North Campus"
+  },
+  {
+    "location_name": "Engineering Block Corridor 195",
+    "building": "Engineering Block",
+    "zone": "North Campus"
+  },
+  {
+    "location_name": "Engineering Block Cafe 411",
+    "building": "Engineering Block",
+    "zone": "North Campus"
+  },
+  {
+    "location_name": "Computer Centre Lounge 445",
+    "building": "Computer Centre",
+    "zone": "North Campus"
+  },
+  {
+    "location_name": "Computer Centre Hall 475",
+    "building": "Computer Centre",
+    "zone": "North Campus"
+  },
+  {
+    "location_name": "Computer Centre Cafe 441",
+    "building": "Computer Centre",
+    "zone": "North Campus"
+  },
+  {
+    "location_name": "Computer Centre Lounge 129",
+    "building": "Computer Centre",
+    "zone": "North Campus"
+  },
+  {
+    "location_name": "Auditorium Room 138",
+    "building": "Auditorium",
+    "zone": "North Campus"
+  },
+  {
+    "location_name": "Auditorium Lounge 137",
+    "building": "Auditorium",
+    "zone": "North Campus"
+  },
+  {
+    "location_name": "Auditorium Office 265",
+    "building": "Auditorium",
+    "zone": "North Campus"
+  },
+  {
+    "location_name": "Auditorium Lounge 120",
+    "building": "Auditorium",
+    "zone": "North Campus"
+  },
+  {
+    "location_name": "Humanities Block Room 339",
+    "building": "Humanities Block",
+    "zone": "South Campus"
+  },
+  {
+    "location_name": "Humanities Block Entrance 400",
+    "building": "Humanities Block",
+    "zone": "South Campus"
+  },
+  {
+    "location_name": "Business School Entrance 486",
+    "building": "Business School",
+    "zone": "South Campus"
+  },
+  {
+    "location_name": "Business School Room 346",
+    "building": "Business School",
+    "zone": "South Campus"
+  },
+  {
+    "location_name": "Business School Cafe 259",
+    "building": "Business School",
+    "zone": "South Campus"
+  },
+  {
+    "location_name": "Business School Cafe 239",
+    "building": "Business School",
+    "zone": "South Campus"
+  },
+  {
+    "location_name": "Law Faculty Hall 244",
+    "building": "Law Faculty",
+    "zone": "South Campus"
+  },
+  {
+    "location_name": "Law Faculty Lab 222",
+    "building": "Law Faculty",
+    "zone": "South Campus"
+  },
+  {
+    "location_name": "Law Faculty Entrance 277",
+    "building": "Law Faculty",
+    "zone": "South Campus"
+  },
+  {
+    "location_name": "Law Faculty Corridor 341",
+    "building": "Law Faculty",
+    "zone": "South Campus"
+  },
+  {
+    "location_name": "Arts Centre Entrance 214",
+    "building": "Arts Centre",
+    "zone": "South Campus"
+  },
+  {
+    "location_name": "Arts Centre Cafe 494",
+    "building": "Arts Centre",
+    "zone": "South Campus"
+  },
+  {
+    "location_name": "Medical Centre Office 366",
+    "building": "Medical Centre",
+    "zone": "East Campus"
+  },
+  {
+    "location_name": "Medical Centre Hall 439",
+    "building": "Medical Centre",
+    "zone": "East Campus"
+  },
+  {
+    "location_name": "Medical Centre Hall 498",
+    "building": "Medical Centre",
+    "zone": "East Campus"
+  },
+  {
+    "location_name": "Medical Centre Hall 182",
+    "building": "Medical Centre",
+    "zone": "East Campus"
+  },
+  {
+    "location_name": "Research Labs Cafe 333",
+    "building": "Research Labs",
+    "zone": "East Campus"
+  },
+  {
+    "location_name": "Research Labs Hall 442",
+    "building": "Research Labs",
+    "zone": "East Campus"
+  },
+  {
+    "location_name": "Research Labs Lab 373",
+    "building": "Research Labs",
+    "zone": "East Campus"
+  },
+  {
+    "location_name": "Research Labs Lounge 403",
+    "building": "Research Labs",
+    "zone": "East Campus"
+  },
+  {
+    "location_name": "Innovation Hub Lab 148",
+    "building": "Innovation Hub",
+    "zone": "East Campus"
+  },
+  {
+    "location_name": "Innovation Hub Lounge 223",
+    "building": "Innovation Hub",
+    "zone": "East Campus"
+  },
+  {
+    "location_name": "Innovation Hub Entrance 107",
+    "building": "Innovation Hub",
+    "zone": "East Campus"
+  },
+  {
+    "location_name": "Architecture Block Cafe 452",
+    "building": "Architecture Block",
+    "zone": "West Campus"
+  },
+  {
+    "location_name": "Architecture Block Office 287",
+    "building": "Architecture Block",
+    "zone": "West Campus"
+  },
+  {
+    "location_name": "Architecture Block Cafe 217",
+    "building": "Architecture Block",
+    "zone": "West Campus"
+  },
+  {
+    "location_name": "Design Studio Corridor 461",
+    "building": "Design Studio",
+    "zone": "West Campus"
+  },
+  {
+    "location_name": "Design Studio Cafe 203",
+    "building": "Design Studio",
+    "zone": "West Campus"
+  },
+  {
+    "location_name": "Design Studio Lab 133",
+    "building": "Design Studio",
+    "zone": "West Campus"
+  },
+  {
+    "location_name": "Media Centre Office 281",
+    "building": "Media Centre",
+    "zone": "West Campus"
+  },
+  {
+    "location_name": "Media Centre Cafe 448",
+    "building": "Media Centre",
+    "zone": "West Campus"
+  },
+  {
+    "location_name": "Student Union Lab 281",
+    "building": "Student Union",
+    "zone": "Central Hub"
+  },
+  {
+    "location_name": "Student Union Cafe 245",
+    "building": "Student Union",
+    "zone": "Central Hub"
+  },
+  {
+    "location_name": "Student Union Lounge 419",
+    "building": "Student Union",
+    "zone": "Central Hub"
+  },
+  {
+    "location_name": "Student Union Cafe 107",
+    "building": "Student Union",
+    "zone": "Central Hub"
+  },
+  {
+    "location_name": "Main Cafeteria Corridor 404",
+    "building": "Main Cafeteria",
+    "zone": "Central Hub"
+  },
+  {
+    "location_name": "Main Cafeteria Lab 209",
+    "building": "Main Cafeteria",
+    "zone": "Central Hub"
+  },
+  {
+    "location_name": "Main Cafeteria Cafe 198",
+    "building": "Main Cafeteria",
+    "zone": "Central Hub"
+  },
+  {
+    "location_name": "Administration Room 358",
+    "building": "Administration",
+    "zone": "Central Hub"
+  },
+  {
+    "location_name": "Administration Room 130",
+    "building": "Administration",
+    "zone": "Central Hub"
+  },
+  {
+    "location_name": "Administration Entrance 395",
+    "building": "Administration",
+    "zone": "Central Hub"
+  },
+  {
+    "location_name": "Registration Office Lab 350",
+    "building": "Registration Office",
+    "zone": "Central Hub"
+  },
+  {
+    "location_name": "Registration Office Hall 362",
+    "building": "Registration Office",
+    "zone": "Central Hub"
+  },
+  {
+    "location_name": "Registration Office Lab 340",
+    "building": "Registration Office",
+    "zone": "Central Hub"
+  },
+  {
+    "location_name": "Registration Office Office 249",
+    "building": "Registration Office",
+    "zone": "Central Hub"
+  },
+  {
+    "location_name": "Indoor Stadium Room 227",
+    "building": "Indoor Stadium",
+    "zone": "Sports Complex"
+  },
+  {
+    "location_name": "Indoor Stadium Corridor 100",
+    "building": "Indoor Stadium",
+    "zone": "Sports Complex"
+  },
+  {
+    "location_name": "Indoor Stadium Entrance 434",
+    "building": "Indoor Stadium",
+    "zone": "Sports Complex"
+  },
+  {
+    "location_name": "Swimming Pool Lab 292",
+    "building": "Swimming Pool",
+    "zone": "Sports Complex"
+  },
+  {
+    "location_name": "Swimming Pool Hall 417",
+    "building": "Swimming Pool",
+    "zone": "Sports Complex"
+  },
+  {
+    "location_name": "Swimming Pool Lounge 166",
+    "building": "Swimming Pool",
+    "zone": "Sports Complex"
+  },
+  {
+    "location_name": "Swimming Pool Cafe 372",
+    "building": "Swimming Pool",
+    "zone": "Sports Complex"
+  },
+  {
+    "location_name": "Gymnasium Hall 375",
+    "building": "Gymnasium",
+    "zone": "Sports Complex"
+  },
+  {
+    "location_name": "Gymnasium Cafe 204",
+    "building": "Gymnasium",
+    "zone": "Sports Complex"
+  },
+  {
+    "location_name": "Tennis Courts Cafe 363",
+    "building": "Tennis Courts",
+    "zone": "Sports Complex"
+  },
+  {
+    "location_name": "Tennis Courts Lounge 217",
+    "building": "Tennis Courts",
+    "zone": "Sports Complex"
+  },
+  {
+    "location_name": "Hostel A Lounge 166",
+    "building": "Hostel A",
+    "zone": "Residential Area"
+  },
+  {
+    "location_name": "Hostel A Cafe 348",
+    "building": "Hostel A",
+    "zone": "Residential Area"
+  },
+  {
+    "location_name": "Hostel A Hall 476",
+    "building": "Hostel A",
+    "zone": "Residential Area"
+  },
+  {
+    "location_name": "Hostel B Lab 208",
+    "building": "Hostel B",
+    "zone": "Residential Area"
+  },
+  {
+    "location_name": "Hostel B Room 110",
+    "building": "Hostel B",
+    "zone": "Residential Area"
+  },
+  {
+    "location_name": "Hostel B Lab 190",
+    "building": "Hostel B",
+    "zone": "Residential Area"
+  },
+  {
+    "location_name": "Hostel C Lab 367",
+    "building": "Hostel C",
+    "zone": "Residential Area"
+  },
+  {
+    "location_name": "Hostel C Office 314",
+    "building": "Hostel C",
+    "zone": "Residential Area"
+  },
+  {
+    "location_name": "Hostel D Cafe 311",
+    "building": "Hostel D",
+    "zone": "Residential Area"
+  },
+  {
+    "location_name": "Hostel D Cafe 289",
+    "building": "Hostel D",
+    "zone": "Residential Area"
+  },
+  {
+    "location_name": "Dining Hall Lounge 100",
+    "building": "Dining Hall",
+    "zone": "Residential Area"
+  },
+  {
+    "location_name": "Dining Hall Lounge 420",
+    "building": "Dining Hall",
+    "zone": "Residential Area"
+  },
+  {
+    "location_name": "Dining Hall Room 414",
+    "building": "Dining Hall",
+    "zone": "Residential Area"
+  },
+  {
+    "location_name": "Dining Hall Cafe 124",
+    "building": "Dining Hall",
+    "zone": "Residential Area"
+  },
+  {
+    "location_name": "Guest House Cafe 433",
+    "building": "Guest House",
+    "zone": "Residential Area"
+  },
+  {
+    "location_name": "Guest House Office 156",
+    "building": "Guest House",
+    "zone": "Residential Area"
+  },
+  {
+    "location_name": "Guest House Office 250",
+    "building": "Guest House",
+    "zone": "Residential Area"
+  }
+]

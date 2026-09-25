@@ -1,0 +1,6 @@
+psql:db/tests/negative_tests.sql:563: NOTICE:  --- RUNNING NEGATIVE TESTS ---
+psql:db/tests/negative_tests.sql:563: NOTICE:  FAIL: ck_users_email_format did not fire
+psql:db/tests/negative_tests.sql:563: NOTICE:  Passed: 50
+psql:db/tests/negative_tests.sql:563: NOTICE:  Failed: 1
+psql:db/tests/negative_tests.sql:563: ERROR:  TEST SUITE FAILED
+CONTEXT:  PL/pgSQL function inline_code_block line 552 at RAISE

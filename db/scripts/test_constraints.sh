@@ -1,2 +1,3 @@
 #!/bin/bash
-psql -h localhost -U foundit_user -d foundit -f db/tests/negative_tests.sql
+DB="${DATABASE_URL:-postgres://foundit_user:foundit_password@localhost:5432/foundit}"
+psql "$DB" -f db/tests/negative_tests.sql
