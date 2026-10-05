@@ -7,6 +7,7 @@ const authRoutes = require('./routes/auth');
 const referenceRoutes = require('./routes/reference');
 const itemsRoutes = require('./routes/items');
 const matchesRoutes = require('./routes/matches');
+const claimsRoutes = require('./routes/claims');
 
 const app = express();
 
@@ -18,6 +19,7 @@ app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/reference', referenceRoutes);
 app.use('/api/v1/items', itemsRoutes);
 app.use('/api/v1/matches', matchesRoutes);
+app.use('/api/v1/claims', claimsRoutes);
 app.use('/api/v1', healthRoutes);
 
 // 404 handler
