@@ -2,11 +2,19 @@
   "name": "foundit",
   "version": "1.0.0",
   "scripts": {
-    "migrate": "dotenv run -f .env -- node-pg-migrate -m db/migrations up",
-    "migrate:down": "dotenv run -f .env -- node-pg-migrate -m db/migrations down 1",
-    "migrate:reset": "dotenv run -f .env -- node-pg-migrate -m db/migrations down 100",
+    "migrate": "node scripts/migrate.js",
     "seed:reference": "node db/scripts/seed_reference.js",
-    "seed:data": "node db/scripts/seed_data.js"
+    "seed:data": "node db/scripts/seed_data.js",
+    "start": "node src/server.js",
+    "dev": "concurrently -k \"node --watch src/server.js\" \"vite --config client/vite.config.mjs\"",
+    "build": "vite build --config client/vite.config.mjs",
+    "test": "node scripts/test.js",
+    "seed:demo": "node scripts/seed-demo.js",
+    "expire": "node scripts/expire.js",
+    "test:mutation": "node scripts/verify-mutation.js",
+    "evaluate": "node scripts/evaluate-matching.js",
+    "benchmark": "node scripts/benchmark.js",
+    "format": "prettier --write client/src src db/queries scripts tests"
   },
   "dependencies": {
     "bcrypt": "^6.0.0",
@@ -14,13 +22,36 @@
     "dotenv": "^18.0.3",
     "express": "^5.2.1",
     "jsonwebtoken": "^9.0.3",
+    "lucide-react": "^1.59.0",
     "node-pg-migrate": "^7.9.1",
     "pg": "^8.11.5",
-    "uuid": "^14.0.2"
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^7.18.4"
   },
   "devDependencies": {
-    "dotenv-cli": "^11.0.0",
+    "@vitejs/plugin-react": "^4.7.0",
+    "concurrently": "^9.2.5",
     "jest": "^30.5.2",
-    "supertest": "^7.3.1"
+    "prettier": "^3.9.10",
+    "supertest": "^7.3.1",
+    "vite": "^6.4.4"
+  },
+  "jest": {
+    "testMatch": [
+      "**/tests/*.test.js"
+    ],
+    "testTimeout": 30000
+  },
+  "overrides": {
+    "node-pg-migrate": {
+      "glob": "^11.1.0"
+    },
+    "@istanbuljs/load-nyc-config": {
+      "js-yaml": "^4.1.1"
+    }
+  },
+  "engines": {
+    "node": ">=20"
   }
 }

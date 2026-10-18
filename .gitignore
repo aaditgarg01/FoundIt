@@ -10,3 +10,8 @@ logfile
 /*_output.txt
 /seed_*.txt
 /schema_dump.txt
+client/dist/
+test-results/
+playwright-report/
+.env.*
+!.env.example

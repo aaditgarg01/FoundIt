@@ -6,7 +6,7 @@ async function logAudit(client, params) {
     old_status = null,
     new_status = null,
     changed_by = null,
-    detail = null
+    detail = null,
   } = params;
 
   await client.query(
@@ -20,11 +20,11 @@ async function logAudit(client, params) {
       old_status,
       new_status,
       changed_by,
-      detail ? JSON.stringify(detail) : null
-    ]
+      detail ? JSON.stringify(detail) : null,
+    ],
   );
 }
 
 module.exports = {
-  logAudit
+  logAudit,
 };

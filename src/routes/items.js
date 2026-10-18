@@ -1,16 +1,17 @@
-const express = require('express');
-const itemsController = require('../controllers/items');
-const { requireAuth } = require('../middlewares/auth');
-
-const router = express.Router();
-
-router.post('/lost', requireAuth, itemsController.createLost);
-router.post('/found', requireAuth, itemsController.createFound);
-
-router.get('/lost', itemsController.browseLost);
-router.get('/found', itemsController.browseFound);
-
-router.get('/lost/:id', itemsController.getLost);
-router.get('/found/:id', itemsController.getFound);
-
-module.exports = router;
+const r = require("express").Router();
+const C = require("../controllers/items");
+const { requireAuth } = require("../middlewares/auth");
+r.use(requireAuth);
+r.get("/mine", C.mine);
+r.get("/mine/lost/:id", C.ownLost);
+r.get("/mine/found/:id", C.ownFound);
+r.post("/lost", C.createLost);
+r.post("/found", C.createFound);
+r.get("/lost", C.browseLost);
+r.get("/found", C.browseFound);
+r.patch("/found/:id/custody", C.updateCustody);
+r.patch("/lost/:id", C.editLost);
+r.post("/lost/:id/withdraw", C.withdraw);
+r.get("/lost/:id", C.getLost);
+r.get("/found/:id", C.getFound);
+module.exports = r;

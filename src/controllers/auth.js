@@ -1,116 +1,121 @@
-const bcrypt = require('bcrypt');
-const jwt = require('jsonwebtoken');
-const { v4: uuidv4 } = require('uuid');
-const { pool } = require('../db');
-const { JWT_SECRET } = require('../middlewares/auth');
-
+const bcrypt = require("bcrypt");
+const jwt = require("jsonwebtoken");
+const { randomBytes, createHash } = require("node:crypto");
+const { pool, withTransaction } = require("../db");
+const Q = require("../../db/queries/auth");
+const { JWT_SECRET } = require("../middlewares/auth");
+const { text, fail } = require("../validation");
+const hash = (v) => createHash("sha256").update(v).digest("hex");
+const sign = (u, sid) =>
+  jwt.sign({ userId: u.user_id, sid }, JWT_SECRET, {
+    expiresIn: "1h",
+    algorithm: "HS256",
+  });
 async function register(req, res, next) {
   try {
-    const { email, password, full_name, role = 'STUDENT' } = req.body;
-    if (!email || !password || !full_name) {
-      return res.status(400).json({ error: 'Missing required fields' });
-    }
-
-    const hash = await bcrypt.hash(password, 12);
-    
-    // Uses RETURNING to get created user
-    const result = await pool.query(
-      'INSERT INTO users (email, password_hash, full_name, role) VALUES ($1, $2, $3, $4) RETURNING user_id, email, full_name, role',
-      [email, hash, full_name, role]
-    );
-    
-    const user = result.rows[0];
-    res.status(201).json({ user });
-  } catch (err) {
-    next(err);
+    const email = text(req.body.email, "Email", 3, 160).toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+      fail("Enter a valid email address.");
+    const domains = (process.env.ALLOWED_EMAIL_DOMAINS || "")
+      .split(",")
+      .map((x) => x.trim())
+      .filter(Boolean);
+    if (domains.length && !domains.includes(email.split("@")[1]))
+      fail("Use your campus email address.");
+    const password = text(req.body.password, "Password", 8, 72);
+    if (Buffer.byteLength(password) > 72)
+      fail("Password must be at most 72 bytes.");
+    if (req.body.role && req.body.role !== "STUDENT")
+      fail("Staff accounts are provisioned by an administrator.");
+    const result = await pool.query(Q.register, [
+      email,
+      await bcrypt.hash(password, 12),
+      text(req.body.full_name, "Full name", 1, 120),
+      req.body.phone ? text(req.body.phone, "Phone", 1, 20) : null,
+      req.body.department
+        ? text(req.body.department, "Department", 1, 100)
+        : null,
+    ]);
+    res.status(201).json({ user: result.rows[0] });
+  } catch (e) {
+    next(e);
   }
 }
-
 async function login(req, res, next) {
   try {
-    const { email, password } = req.body;
-    if (!email || !password) {
-      return res.status(400).json({ error: 'Missing credentials' });
-    }
-
-    const result = await pool.query('SELECT * FROM users WHERE email = $1 AND is_active = true', [email]);
-    const user = result.rows[0];
-
-    // Timing equalization: always compare against something if user not found
-    const hashToCompare = user ? user.password_hash : await bcrypt.hash('dummy', 12);
-    const valid = await bcrypt.compare(password, hashToCompare);
-
-    if (!user || !valid) {
-      return res.status(401).json({ error: 'Invalid credentials' });
-    }
-
-    // Issue JWT
-    const payload = { userId: user.user_id, role: user.role, email: user.email };
-    const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '1h' });
-
-    // Issue refresh token
-    const sid = uuidv4();
-    const expire = new Date();
-    expire.setDate(expire.getDate() + 7); // 7 days
-
-    await pool.query(
-      'INSERT INTO sessions (sid, sess, expire, user_id) VALUES ($1, $2, $3, $4)',
-      [sid, JSON.stringify({ refreshToken: true }), expire, user.user_id]
+    const email = text(req.body.email, "Email", 3, 160);
+    const password = text(req.body.password, "Password", 1, 72);
+    const { rows } = await pool.query(Q.byEmail, [email]);
+    const u = rows[0];
+    const valid = await bcrypt.compare(
+      password,
+      u?.password_hash ||
+        "$2b$12$R9h/cIPz0gi.URNNX3kh2OPST9/PgBkqquzi.Ss7KIUgO2t0jWMUW",
     );
-
-    res.json({ token, refreshToken: sid, user: { user_id: user.user_id, email: user.email, role: user.role, full_name: user.full_name } });
-  } catch (err) {
-    next(err);
+    if (!u || !valid) fail("Email or password is incorrect.", 401);
+    const refreshToken = randomBytes(32).toString("hex");
+    const sid = hash(refreshToken);
+    await pool.query(Q.session, [sid, u.user_id]);
+    res.json({
+      token: sign(u, sid),
+      refreshToken,
+      user: {
+        user_id: u.user_id,
+        email: u.email,
+        full_name: u.full_name,
+        role: u.role,
+        phone: u.phone,
+        department: u.department,
+      },
+    });
+  } catch (e) {
+    next(e);
   }
 }
-
-async function logout(req, res, next) {
-  try {
-    const { refreshToken } = req.body;
-    if (refreshToken) {
-      await pool.query('DELETE FROM sessions WHERE sid = $1 AND user_id = $2', [refreshToken, req.user.userId]);
-    }
-    res.json({ message: 'Logged out successfully' });
-  } catch (err) {
-    next(err);
-  }
-}
-
 async function refresh(req, res, next) {
   try {
-    const { refreshToken } = req.body;
-    if (!refreshToken) return res.status(401).json({ error: 'No refresh token' });
-
-    const result = await pool.query('SELECT * FROM sessions WHERE sid = $1 AND expire > NOW()', [refreshToken]);
-    if (result.rows.length === 0) {
-      return res.status(401).json({ error: 'Invalid or expired refresh token' });
-    }
-
-    const session = result.rows[0];
-    
-    const userRes = await pool.query('SELECT * FROM users WHERE user_id = $1 AND is_active = true', [session.user_id]);
-    const user = userRes.rows[0];
-    if (!user) {
-      return res.status(401).json({ error: 'User not found or inactive' });
-    }
-
-    const payload = { userId: user.user_id, role: user.role, email: user.email };
-    const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '1h' });
-
-    res.json({ token });
-  } catch (err) {
-    next(err);
+    const raw = text(req.body.refreshToken, "Session", 1, 128);
+    const { rows } = await pool.query(Q.refresh, [hash(raw)]);
+    if (!rows[0]) fail("Please sign in again.", 401);
+    res.json({ token: sign(rows[0], rows[0].session_id) });
+  } catch (e) {
+    next(e);
   }
 }
-
-async function me(req, res, next) {
-  res.json({ user: req.user });
+async function logout(req, res, next) {
+  try {
+    await pool.query(Q.logout, [req.user.sid, req.user.userId]);
+    res.json({ success: true });
+  } catch (e) {
+    next(e);
+  }
 }
-
-module.exports = {
-  register,
-  login,
-  logout,
-  refresh,
-  me
-};
+async function me(req, res) {
+  const { sid, userId, ...user } = req.user;
+  res.json({ user });
+}
+async function updateProfile(req, res, next) {
+  try {
+    const user = await withTransaction(async (c) => {
+      const r = await c.query(Q.profile, [
+        text(req.body.full_name, "Full name", 1, 120),
+        req.body.phone ? text(req.body.phone, "Phone", 1, 20) : null,
+        req.body.department
+          ? text(req.body.department, "Department", 1, 100)
+          : null,
+        req.user.userId,
+      ]);
+      await require("../services/audit").logAudit(c, {
+        entity_type: "USER",
+        entity_id: req.user.userId,
+        action: "UPDATED",
+        changed_by: req.user.userId,
+      });
+      return r.rows[0];
+    }, req.user.userId);
+    res.json({ user });
+  } catch (e) {
+    next(e);
+  }
+}
+module.exports = { register, login, logout, refresh, me, updateProfile };

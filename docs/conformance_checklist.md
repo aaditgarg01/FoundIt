@@ -1,3 +1,5 @@
+> Historical schema snapshot. For the current migrated application contract and verification limits, see [completion.md](completion.md). In particular, sessions use session_id/expires_at, not the sid/sess/expire fields listed below.
+
 # FoundIt Schema Conformance Checklist
 
 | Object | TRD §5/§7 says (verbatim) | \d+ shows (verbatim) | Status |

@@ -1,20 +1,12 @@
-const express = require('express');
-const { requireAuth } = require('../middlewares/auth');
-const claimsController = require('../controllers/claims');
-
-const router = express.Router();
-
-// T3.5 Claim creation
-router.post('/', requireAuth, claimsController.createClaim);
-
-// T3.6, T3.7 Approval / Rejection
-router.post('/:id/approve', requireAuth, claimsController.approveClaim);
-router.post('/:id/reject', requireAuth, claimsController.rejectClaim);
-
-// T3.8 Handover
-router.post('/:id/handover', requireAuth, claimsController.completeHandover);
-
-// T3.11 Timeline
-router.get('/timeline/:id', requireAuth, claimsController.getTimeline);
-
-module.exports = router;
+const r = require("express").Router();
+const C = require("../controllers/claims");
+r.use(require("../middlewares/auth").requireAuth);
+r.get("/", C.list);
+r.post("/", C.createClaim);
+r.get("/timeline/:id", C.getTimeline);
+r.get("/:id", C.detail);
+r.post("/:id/approve", C.approveClaim);
+r.post("/:id/reject", C.rejectClaim);
+r.post("/:id/handover", C.completeHandover);
+r.post("/:id/withdraw", C.withdraw);
+module.exports = r;

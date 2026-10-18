@@ -1,4 +1,4 @@
-const referenceService = require('../services/reference');
+const referenceService = require("../services/reference");
 
 async function getAll(req, res, next) {
   try {
@@ -12,7 +12,7 @@ async function getAll(req, res, next) {
 async function invalidate(req, res, next) {
   try {
     await referenceService.reloadCache();
-    res.json({ message: 'Cache reloaded successfully' });
+    res.json({ message: "Cache reloaded successfully" });
   } catch (err) {
     next(err);
   }
@@ -20,5 +20,5 @@ async function invalidate(req, res, next) {
 
 module.exports = {
   getAll,
-  invalidate
+  invalidate,
 };

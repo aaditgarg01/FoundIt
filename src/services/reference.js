@@ -1,36 +1,8 @@
-const { pool } = require('../db');
-
-let cache = {
-  categories: [],
-  locations: [],
-  brands: [],
-  colours: [],
-  lastUpdated: null
-};
-
-async function reloadCache() {
-  const categoriesRes = await pool.query('SELECT * FROM categories ORDER BY category_name');
-  const locationsRes = await pool.query('SELECT * FROM locations ORDER BY location_name');
-  const brandsRes = await pool.query('SELECT * FROM brands WHERE is_active = true ORDER BY brand_name');
-  const coloursRes = await pool.query('SELECT * FROM colours ORDER BY colour_name');
-
-  cache = {
-    categories: categoriesRes.rows,
-    locations: locationsRes.rows,
-    brands: brandsRes.rows,
-    colours: coloursRes.rows,
-    lastUpdated: new Date()
-  };
-}
-
+const { pool } = require("../db");
+const Q = require("../../db/queries/reference");
 async function getCache() {
-  if (!cache.lastUpdated) {
-    await reloadCache();
-  }
-  return cache;
+  const keys = Object.keys(Q.tables);
+  const rows = await Promise.all(keys.map((k) => pool.query(Q.all(k))));
+  return Object.fromEntries(keys.map((k, i) => [k, rows[i].rows]));
 }
-
-module.exports = {
-  reloadCache,
-  getCache
-};
+module.exports = { getCache, reloadCache: getCache };

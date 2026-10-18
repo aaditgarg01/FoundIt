@@ -1,219 +1,196 @@
-const { pool, withTransaction } = require('../db');
-const { logAudit } = require('../services/audit');
-
-async function createLost(req, res, next) {
+const { pool, withTransaction } = require("../db");
+const Q = require("../../db/queries/items");
+const V = require("../validation");
+const staff = (u) => ["STAFF", "ADMIN"].includes(u.role);
+const create = (kind) => async (req, res, next) => {
   try {
-    const { category_id, location_id, brand_id, colour_id, lost_date, item_name, description } = req.body;
-    
-    const result = await withTransaction(async (client) => {
-      // 1. Insert lost item
-      const insertRes = await client.query(
-        `INSERT INTO lost_items (
-          user_id, category_id, location_id, brand_id, colour_id, lost_date, item_name, description
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING lost_id`,
-        [req.user.userId, category_id, location_id, brand_id, colour_id, lost_date, item_name, description]
+    const data = V.item(req.body, kind);
+    let reporter = req.user.userId;
+    if (kind === "found" && req.body.anonymous === true) {
+      if (!staff(req.user))
+        V.fail("Anonymous intake is available to campus staff.", 403);
+      reporter = null;
+      data.finder_note = V.text(
+        req.body.finder_note || "Anonymous finder recorded by campus staff",
+        "Finder note",
+        1,
+        160,
       );
-      const lost_id = insertRes.rows[0].lost_id;
-
-      // 2. Audit
-      await logAudit(client, {
-        entity_type: 'LOST_ITEM',
-        entity_id: lost_id,
-        action: 'CREATED',
-        changed_by: req.user.userId
-      });
-
-      // 3. Generate matches
-      const matchRes = await client.query('CALL generate_matches_for_lost($1, null)', [lost_id]);
-      
-      // Top match retrieval
-      const topMatchRes = await client.query(
-        'SELECT match_id, found_id, match_score, match_band, status FROM matches WHERE lost_id = $1 ORDER BY match_score DESC LIMIT 1',
-        [lost_id]
-      );
-
-      // Return
-      return { lost_id, topMatch: topMatchRes.rows[0] || null };
-    });
-
+    }
+    const result = await withTransaction(async (c) => {
+      const cat = (await c.query(Q.category, [data.category_id])).rows[0];
+      if (!cat || !(await c.query(Q.references, [data.location_id])).rowCount)
+        V.fail("Choose an active category and location.");
+      const row = (await c.query(Q.insert(kind, data, reporter))).rows[0];
+      const itemId = row[kind + "_id"];
+      await c.query(kind === "lost" ? Q.matchLost : Q.matchFound, [itemId]);
+      const top = (await c.query(Q.top(kind), [itemId])).rows[0] || null;
+      return {
+        ...row,
+        topMatch: kind === "lost" ? top : null,
+        custody_instruction:
+          kind === "found"
+            ? cat.requires_staff || data.is_high_value
+              ? "Please deposit this item at campus security. Staff will verify ownership."
+              : data.custody === "WITH_FINDER"
+                ? "Keep the item safe. We will ask you to verify any ownership claims."
+                : "Thank you. The campus staff will coordinate verification and collection."
+            : undefined,
+      };
+    }, req.user.userId);
     res.status(201).json(result);
-  } catch (err) {
-    next(err);
+  } catch (e) {
+    next(e);
+  }
+};
+const browse = (kind) => async (req, res, next) => {
+  try {
+    const q = Q.browse(kind, req.query);
+    const [list, count] = await Promise.all([
+      pool.query(q.list, [...q.params, q.limit, q.offset]),
+      pool.query(q.count, q.params),
+    ]);
+    const items = list.rows.map(({ search_vector, ...row }) => row);
+    res.json({
+      items,
+      total: count.rows[0].total,
+      limit: q.limit,
+      offset: q.offset,
+    });
+  } catch (e) {
+    next(e);
+  }
+};
+const detail = (kind) => async (req, res, next) => {
+  try {
+    const row = (await pool.query(Q.detail(kind), [V.id(req.params.id)]))
+      .rows[0];
+    if (!row) V.fail("Item not found.", 404);
+    const { search_vector, ...safe } = row;
+    res.json(safe);
+  } catch (e) {
+    next(e);
+  }
+};
+async function mine(req, res, next) {
+  try {
+    const all = req.query.all === "true" && staff(req.user);
+    const [l, f] = await Promise.all([
+      pool.query(Q.mineLost, [req.user.userId, all]),
+      pool.query(Q.mineFound, [req.user.userId, all]),
+    ]);
+    res.json({ lost: l.rows, found: f.rows });
+  } catch (e) {
+    next(e);
   }
 }
-
-async function createFound(req, res, next) {
+const own = (kind) => async (req, res, next) => {
   try {
-    const { category_id, location_id, brand_id, colour_id, found_date, item_name, description, private_feature, custody, storage_location } = req.body;
-
-    // Check if public duplicates private
-    if (description && private_feature && description.includes(private_feature)) {
-      return res.status(400).json({ error: 'Validation Error', details: 'Private feature must not be in public description' });
-    }
-
-    const result = await withTransaction(async (client) => {
-      const insertRes = await client.query(
-        `INSERT INTO found_items (
-          user_id, category_id, location_id, brand_id, colour_id, found_date, item_name, description, private_feature, custody, storage_location
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING found_id`,
-        [req.user.userId, category_id, location_id, brand_id, colour_id, found_date, item_name, description, private_feature, custody, storage_location]
-      );
-      const found_id = insertRes.rows[0].found_id;
-
-      await logAudit(client, {
-        entity_type: 'FOUND_ITEM',
-        entity_id: found_id,
-        action: 'CREATED',
-        changed_by: req.user.userId
+    const row = (
+      await pool.query(Q.own(kind), [
+        V.id(req.params.id),
+        req.user.userId,
+        staff(req.user),
+      ])
+    ).rows[0];
+    if (!row) V.fail("Report not found.", 404);
+    res.json(row);
+  } catch (e) {
+    next(e);
+  }
+};
+async function withdraw(req, res, next) {
+  try {
+    const id = V.id(req.params.id);
+    await withTransaction(async (c) => {
+      const row = (await c.query(Q.withdrawLock, [id, req.user.userId]))
+        .rows[0];
+      if (!row) V.fail("Report not found.", 404);
+      if (row.status !== "OPEN" || (await c.query(Q.hasClaims, [id])).rowCount)
+        V.fail("A report with an active claim cannot be withdrawn.", 409);
+      await c.query(Q.withdraw, [id]);
+      await c.query(Q.invalidate, [id]);
+    }, req.user.userId);
+    res.json({ success: true });
+  } catch (e) {
+    next(e);
+  }
+}
+async function editLost(req, res, next) {
+  try {
+    const id = V.id(req.params.id),
+      data = V.item(req.body, "lost");
+    await withTransaction(async (c) => {
+      const row = (await c.query(Q.withdrawLock, [id, req.user.userId]))
+        .rows[0];
+      if (!row) V.fail("Report not found.", 404);
+      if (row.status !== "OPEN" || (await c.query(Q.hasClaims, [id])).rowCount)
+        V.fail("Reports can only be edited before a claim is filed.", 409);
+      await c.query(Q.updateLost(data), [...Object.values(data), id]);
+      await c.query(Q.invalidateSuggested, [id]);
+      await c.query(Q.reactivate, [id]);
+      await c.query(Q.matchLost, [id]);
+      await require("../services/audit").logAudit(c, {
+        entity_type: "LOST_ITEM",
+        entity_id: id,
+        action: "UPDATED",
+        changed_by: req.user.userId,
       });
-
-      const matchRes = await client.query('CALL generate_matches_for_found($1, null)', [found_id]);
-      
-      const topMatchRes = await client.query(
-        'SELECT match_id, lost_id, match_score, match_band, status FROM matches WHERE found_id = $1 ORDER BY match_score DESC LIMIT 1',
-        [found_id]
-      );
-
-      return { found_id, topMatch: topMatchRes.rows[0] || null };
-    });
-
-    res.status(201).json(result);
-  } catch (err) {
-    next(err);
+    }, req.user.userId);
+    res.json({ success: true });
+  } catch (e) {
+    next(e);
   }
 }
-
-async function browseLost(req, res, next) {
+async function updateCustody(req, res, next) {
   try {
-    const { q, category_id, location_id, status, sort = 'newest', limit = 20, offset = 0 } = req.query;
-    
-    let queryText = 'SELECT *, count(*) OVER() as total_count FROM v_public_lost_items WHERE 1=1';
-    let params = [];
-    let paramIndex = 1;
-
-    if (q) {
-      queryText += ` AND text_search @@ plainto_tsquery('english', $${paramIndex})`;
-      params.push(q);
-      paramIndex++;
-    }
-
-    if (category_id) {
-      queryText += ` AND category_id = $${paramIndex}`;
-      params.push(category_id);
-      paramIndex++;
-    }
-
-    if (location_id) {
-      queryText += ` AND location_id = $${paramIndex}`;
-      params.push(location_id);
-      paramIndex++;
-    }
-
-    if (status) {
-      queryText += ` AND status = $${paramIndex}`;
-      params.push(status);
-      paramIndex++;
-    }
-
-    const sortMap = {
-      'newest': 'created_at DESC',
-      'oldest': 'created_at ASC',
-      'date_desc': 'lost_date DESC',
-      'date_asc': 'lost_date ASC'
-    };
-
-    const orderBy = sortMap[sort] || sortMap['newest'];
-    queryText += ` ORDER BY ${orderBy} LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
-    params.push(limit, offset);
-
-    const result = await pool.query(queryText, params);
-    res.json({
-      items: result.rows,
-      total: result.rows.length > 0 ? parseInt(result.rows[0].total_count) : 0
-    });
-  } catch (err) {
-    next(err);
+    const id = V.id(req.params.id),
+      custody = req.body.custody;
+    if (
+      ![
+        "WITH_FINDER",
+        "DEPOSITED_SECURITY",
+        "DEPOSITED_DEPARTMENT",
+        "DEPOSITED_HOSTEL",
+      ].includes(custody)
+    )
+      V.fail("Choose a valid custody option.");
+    const storage = req.body.storage_location
+      ? V.text(req.body.storage_location, "Storage location", 1, 160)
+      : null;
+    if (custody !== "WITH_FINDER" && !storage)
+      V.fail("Specify where you deposited the item.");
+    await withTransaction(async (c) => {
+      const row = (
+        await c.query(Q.custodyLock, [id, req.user.userId, staff(req.user)])
+      ).rows[0];
+      if (!row) V.fail("Report not found.", 404);
+      if (row.status !== "AVAILABLE")
+        V.fail("Custody can only be updated while the item is available.", 409);
+      await c.query(Q.custody, [id, custody, storage]);
+      await require("../services/audit").logAudit(c, {
+        entity_type: "FOUND_ITEM",
+        entity_id: id,
+        action: "UPDATED",
+        changed_by: req.user.userId,
+      });
+    }, req.user.userId);
+    res.json({ success: true });
+  } catch (e) {
+    next(e);
   }
 }
-
-async function browseFound(req, res, next) {
-  try {
-    const { q, category_id, location_id, status, sort = 'newest', limit = 20, offset = 0 } = req.query;
-    
-    let queryText = 'SELECT *, count(*) OVER() as total_count FROM v_public_found_items WHERE 1=1';
-    let params = [];
-    let paramIndex = 1;
-
-    if (q) {
-      queryText += ` AND text_search @@ plainto_tsquery('english', $${paramIndex})`;
-      params.push(q);
-      paramIndex++;
-    }
-
-    if (category_id) {
-      queryText += ` AND category_id = $${paramIndex}`;
-      params.push(category_id);
-      paramIndex++;
-    }
-
-    if (location_id) {
-      queryText += ` AND location_id = $${paramIndex}`;
-      params.push(location_id);
-      paramIndex++;
-    }
-
-    if (status) {
-      queryText += ` AND status = $${paramIndex}`;
-      params.push(status);
-      paramIndex++;
-    }
-
-    const sortMap = {
-      'newest': 'created_at DESC',
-      'oldest': 'created_at ASC',
-      'date_desc': 'found_date DESC',
-      'date_asc': 'found_date ASC'
-    };
-
-    const orderBy = sortMap[sort] || sortMap['newest'];
-    queryText += ` ORDER BY ${orderBy} LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
-    params.push(limit, offset);
-
-    const result = await pool.query(queryText, params);
-    res.json({
-      items: result.rows,
-      total: result.rows.length > 0 ? parseInt(result.rows[0].total_count) : 0
-    });
-  } catch (err) {
-    next(err);
-  }
-}
-
-async function getLost(req, res, next) {
-  try {
-    const result = await pool.query('SELECT * FROM v_public_lost_items WHERE lost_id = $1', [req.params.id]);
-    if (result.rows.length === 0) return res.status(404).json({ error: 'Not found' });
-    res.json(result.rows[0]);
-  } catch (err) {
-    next(err);
-  }
-}
-
-async function getFound(req, res, next) {
-  try {
-    const result = await pool.query('SELECT * FROM v_public_found_items WHERE found_id = $1', [req.params.id]);
-    if (result.rows.length === 0) return res.status(404).json({ error: 'Not found' });
-    res.json(result.rows[0]);
-  } catch (err) {
-    next(err);
-  }
-}
-
 module.exports = {
-  createLost,
-  createFound,
-  browseLost,
-  browseFound,
-  getLost,
-  getFound
+  updateCustody,
+  createLost: create("lost"),
+  createFound: create("found"),
+  browseLost: browse("lost"),
+  browseFound: browse("found"),
+  getLost: detail("lost"),
+  getFound: detail("found"),
+  mine,
+  ownLost: own("lost"),
+  ownFound: own("found"),
+  withdraw,
+  editLost,
 };

@@ -1,3 +1,4 @@
+require('dotenv').config({ quiet: true });
 const fs = require('fs');
 const path = require('path');
 const { Client } = require('pg');
@@ -129,7 +130,7 @@ async function seedReference() {
       await client.query(
         `INSERT INTO match_config (config_key, config_value, description) 
          VALUES ($1, $2, $3) 
-         ON CONFLICT (config_key) DO UPDATE SET config_value = EXCLUDED.config_value, description = EXCLUDED.description`,
+         ON CONFLICT (config_key) DO NOTHING`,
         [key, val, desc]
       );
     }

@@ -1,0 +1,11 @@
+node_modules
+.env
+.env.*
+!.env.example
+.git
+client/dist
+coverage
+test-results
+playwright-report
+work
+outputs

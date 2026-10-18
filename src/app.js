@@ -1,33 +1,52 @@
-require('dotenv').config({ path: '.env' });
-const express = require('express');
-const cors = require('cors');
-const { loggerMiddleware, errorHandler } = require('./middlewares');
-const healthRoutes = require('./routes/health');
-const authRoutes = require('./routes/auth');
-const referenceRoutes = require('./routes/reference');
-const itemsRoutes = require('./routes/items');
-const matchesRoutes = require('./routes/matches');
-const claimsRoutes = require('./routes/claims');
-
+require("dotenv").config({ quiet: true });
+const express = require("express"),
+  cors = require("cors"),
+  path = require("node:path");
+const { loggerMiddleware, errorHandler, rateLimit } = require("./middlewares");
 const app = express();
-
-app.use(cors());
-app.use(express.json());
-app.use(loggerMiddleware);
-
-app.use('/api/v1/auth', authRoutes);
-app.use('/api/v1/reference', referenceRoutes);
-app.use('/api/v1/items', itemsRoutes);
-app.use('/api/v1/matches', matchesRoutes);
-app.use('/api/v1/claims', claimsRoutes);
-app.use('/api/v1', healthRoutes);
-
-// 404 handler
+app.disable("x-powered-by");
+app.use(cors({ origin: process.env.CLIENT_ORIGIN || "http://localhost:5173" }));
 app.use((req, res, next) => {
-  res.status(404).json({ error: 'Not Found' });
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Referrer-Policy", "same-origin");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader(
+    "Content-Security-Policy",
+    "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; script-src 'self'; connect-src 'self'",
+  );
+  next();
 });
-
-// Error handler MUST be last
+app.use(express.json({ limit: "32kb" }));
+app.use(loggerMiddleware);
+app.use((req, res, next) => {
+  req.body ??= {};
+  next();
+});
+app.use(
+  "/api/v1/auth",
+  rateLimit(process.env.NODE_ENV === "test" ? 10000 : 60, 15 * 60 * 1000),
+  require("./routes/auth"),
+);
+for (const route of [
+  "reference",
+  "items",
+  "matches",
+  "claims",
+  "dashboard",
+  "config",
+])
+  app.use("/api/v1/" + route, require("./routes/" + route));
+app.use("/api/v1", require("./routes/health"));
+app.use("/api", (_req, res) =>
+  res.status(404).json({ error: "Endpoint not found." }),
+);
+app.use(express.static(path.join(__dirname, "../client/dist")));
+app.get("/{*path}", (req, res, next) => {
+  if (!req.accepts("html")) return next();
+  res.sendFile(path.join(__dirname, "../client/dist/index.html"), (e) => {
+    if (e) next();
+  });
+});
+app.use((req, res) => res.status(404).json({ error: "Page not found." }));
 app.use(errorHandler);
-
 module.exports = app;
