@@ -5,6 +5,11 @@ const express = require("express"),
 const { loggerMiddleware, errorHandler, rateLimit } = require("./middlewares");
 const app = express();
 app.disable("x-powered-by");
+if (process.env.VERCEL) app.set("trust proxy", 1);
+app.use("/api", (req, res, next) => {
+  res.setHeader("Cache-Control", "private, no-store");
+  next();
+});
 app.use(cors({ origin: process.env.CLIENT_ORIGIN || "http://localhost:5173" }));
 app.use((req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");

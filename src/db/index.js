@@ -5,7 +5,15 @@ types.setTypeParser(1082, (value) => value);
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
+  max: Number(process.env.DB_POOL_MAX || (process.env.VERCEL ? 3 : 10)),
+  idleTimeoutMillis: 10000,
+  connectionTimeoutMillis: 10000,
+  allowExitOnIdle: true,
 });
+
+if (process.env.VERCEL) {
+  require("@vercel/functions").attachDatabasePool(pool);
+}
 
 /**
  * Execute a query using the connection pool

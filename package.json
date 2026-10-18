@@ -14,9 +14,11 @@
     "test:mutation": "node scripts/verify-mutation.js",
     "evaluate": "node scripts/evaluate-matching.js",
     "benchmark": "node scripts/benchmark.js",
-    "format": "prettier --write client/src src db/queries scripts tests"
+    "format": "prettier --write client/src src db/queries scripts tests",
+    "build:vercel": "node scripts/prepare-deployment.js && npm run build"
   },
   "dependencies": {
+    "@vercel/functions": "^3.10.1",
     "bcrypt": "^6.0.0",
     "cors": "^2.8.6",
     "dotenv": "^18.0.3",
@@ -52,6 +54,6 @@
     }
   },
   "engines": {
-    "node": ">=20"
+    "node": "22.x"
   }
 }

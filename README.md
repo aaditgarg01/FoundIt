@@ -2,9 +2,35 @@
 
 A working campus lost-and-found application: React frontend, Express API and PostgreSQL matching, proof-of-ownership verification, safe claim approval and an append-only audit trail.
 
+## Deploy to Vercel
+
+The repository includes `vercel.json` and a Node function adapter. Vercel serves the compiled React frontend from `client/dist` and routes `/api/*` to the Express API. Both run on the same origin; browser tokens and database credentials are never embedded in the client build.
+
+1. Create a hosted PostgreSQL database. The deployed FoundIt instance uses a dedicated Neon Free database in Singapore, with Neon Auth and Realtime disabled because FoundIt has its own authentication.
+2. Import `aaditgarg01/FoundIt` into Vercel from the repository root. Use Node **22.x**, framework **Vite**, build command **`npm run build:vercel`**, and output directory **`client/dist`**. These settings are also recorded in `vercel.json`.
+3. Set these encrypted server environment variables before deploying:
+
+| Variable                 | Value                                                                     |
+| ------------------------ | ------------------------------------------------------------------------- |
+| `DATABASE_URL`           | Pooled hosted PostgreSQL URL, including TLS parameters                    |
+| `MIGRATION_DATABASE_URL` | Direct/unpooled PostgreSQL URL for migration locks                        |
+| `JWT_SECRET`             | At least 32 cryptographically random characters                           |
+| `DB_POOL_MAX`            | `3` connections per function instance                                     |
+| `CLIENT_ORIGIN`          | Your final `https://…vercel.app` origin, if cross-origin access is needed |
+| `ALLOWED_EMAIL_DOMAINS`  | Optional comma-separated institutional email domains                      |
+
+4. Deploy. `build:vercel` validates configuration, applies forward migrations, seeds reference data idempotently, and compiles the frontend. It never seeds demo users or synthetic reports. The migration account needs permission to create roles because the original schema creates `foundit_app`.
+5. Verify `/api/v1/health` returns `{ "status": "ok", "db": true }`, load `/login` directly, and create a student account through the live app.
+
+Vercel runs the API in Singapore near the database. The connection pool is bounded and attached to Vercel's function lifecycle so idle connections are released when instances suspend. API responses use `Cache-Control: private, no-store`; security headers also cover the static frontend.
+
+Keep production database credentials scoped to **Production**. Give preview deployments a separate database/branch before enabling their builds; never run unreviewed preview migrations against production. Migrations use the direct connection rather than a transaction-pooling proxy. The existing manual `npm run expire` command is available to an operator; this deployment does not schedule automated status-changing jobs.
+
+Useful references: [Vite deployment](https://vercel.com/docs/frameworks/frontend/vite), [Vercel function connection pools](https://vercel.com/kb/guide/connection-pooling-with-functions), and [Neon integration](https://neon.tech/docs/guides/vercel-native-integration).
+
 ## Run locally
 
-Requires Node.js 20+ and PostgreSQL 15+.
+Requires Node.js 22 and PostgreSQL 15+.
 
 ```sh
 npm ci
@@ -84,7 +110,7 @@ npm audit
 
 The suite covers successful and invalid requests, sessions, authorization, privacy, matching, quotas, editing, custody, anonymous intake, expiry, audit rollback and a 50-way approval race. The concurrency suite also bypasses the approval procedure deliberately to verify that the unique index prevents double approval. The mutation check temporarily removes proof redaction, requires exactly the privacy assertion to fail, and restores the source unconditionally. Do not run it while editing `db/queries/claims.js`.
 
-CI runs against PostgreSQL 15 and Node 20. Local verification used PostgreSQL 16 and Node 26. See [implementation notes](docs/completion.md) for details and limits.
+CI runs against PostgreSQL 15 and Node 22. Local verification used PostgreSQL 16 and Node 26. See [implementation notes](docs/completion.md) for details and limits.
 
 ## Evaluation and performance
 
