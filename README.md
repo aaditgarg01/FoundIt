@@ -2,6 +2,12 @@
 
 A working campus lost-and-found application: React frontend, Express API and PostgreSQL matching, proof-of-ownership verification, safe claim approval and an append-only audit trail.
 
+**Live application: [foundit-campus.vercel.app](https://foundit-campus.vercel.app)**
+
+[![FoundIt checks](https://github.com/aaditgarg01/FoundIt/actions/workflows/ci.yml/badge.svg)](https://github.com/aaditgarg01/FoundIt/actions/workflows/ci.yml)
+
+Production runs from the `master` branch on Vercel, with a dedicated Neon PostgreSQL database in Singapore. The production database starts empty apart from reference data. Create your own student account through the live app; the local demo credentials below do not work on production.
+
 ## Deploy to Vercel
 
 The repository includes `vercel.json` and a Node function adapter. Vercel serves the compiled React frontend from `client/dist` and routes `/api/*` to the Express API. Both run on the same origin; browser tokens and database credentials are never embedded in the client build.
@@ -27,6 +33,10 @@ Vercel runs the API in Singapore near the database. The connection pool is bound
 Keep production database credentials scoped to **Production**. Give preview deployments a separate database/branch before enabling their builds; never run unreviewed preview migrations against production. Migrations use the direct connection rather than a transaction-pooling proxy. The existing manual `npm run expire` command is available to an operator; this deployment does not schedule automated status-changing jobs.
 
 Useful references: [Vite deployment](https://vercel.com/docs/frameworks/frontend/vite), [Vercel function connection pools](https://vercel.com/kb/guide/connection-pooling-with-functions), and [Neon integration](https://neon.tech/docs/guides/vercel-native-integration).
+
+### First administrator
+
+Register your own account through the live application first. A database owner can then assign that account the `ADMIN` role in the Neon SQL editor. Public registration deliberately cannot create staff or administrator accounts. Keep role assignment restricted to the database owner; do not add a public promotion endpoint.
 
 ## Run locally
 
@@ -110,7 +120,7 @@ npm audit
 
 The suite covers successful and invalid requests, sessions, authorization, privacy, matching, quotas, editing, custody, anonymous intake, expiry, audit rollback and a 50-way approval race. The concurrency suite also bypasses the approval procedure deliberately to verify that the unique index prevents double approval. The mutation check temporarily removes proof redaction, requires exactly the privacy assertion to fail, and restores the source unconditionally. Do not run it while editing `db/queries/claims.js`.
 
-CI runs against PostgreSQL 15 and Node 22. Local verification used PostgreSQL 16 and Node 26. See [implementation notes](docs/completion.md) for details and limits.
+CI runs against PostgreSQL 15 and Node 22. Local verification used PostgreSQL 16 and Node 26. See [deployment verification](docs/deployment.md) and [implementation notes](docs/completion.md) for details and limits.
 
 ## Evaluation and performance
 
